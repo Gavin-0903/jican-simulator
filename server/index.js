@@ -5,7 +5,7 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, watchBalance } from './persistence/ConfigLoader.js';
 import { SaveManager } from './persistence/SaveManager.js';
@@ -19,6 +19,7 @@ import { RoomManager } from './net/RoomManager.js';
 import { createLobbyRouter } from './net/LobbyHttp.js';
 import { applySetup, readSettings, writeSettings } from './persistence/AppSettings.js';
 import { enableServerSource, readOnlineConfig, writeOnlineConfig } from './persistence/OnlineConfig.js';
+import { dataDir } from './persistence/paths.js';
 import { findTailscale, makeOnlineToken, resetExpose, setupTailscale, tailscaleInstalled, tailscaleVersion } from './net/TailScale.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -60,7 +61,9 @@ export async function startServer(opts = {}) {
   const map = new GameMap(config.mapData, { radius: config.balance.move.radius, gridSize: config.balance.nav.gridSize, lowCoverDepth: config.balance.vision.lowCoverDepth });
   const gateway = new LlmGateway(config.llm, { logger });
   await gateway.init();
-  const saves = new SaveManager({ dir: saveDir ?? resolve(rootDir, config.app.save.dir), keepRounds: config.app.save.keepRounds, logger });
+  // 存档目录：默认配置里写的是相对路径（data/saves），必须挂到真正的可写数据目录下，
+  // 否则装进 Program Files 后存档全部 EPERM。绝对路径（--save-dir / saveDir 参数）原样使用。
+  const saves = new SaveManager({ dir: saveDir ?? (isAbsolute(config.app.save.dir) ? config.app.save.dir : join(dataDir(), config.app.save.dir)), keepRounds: config.app.save.keepRounds, logger });
   const controller = new GameController({ config, map, saveManager: saves, gateway, logger });
 
   // 联机（需求 3）：本机 ID 密钥 + 房间表；只有「服务器源」实例才挂载大厅路由。
@@ -179,8 +182,9 @@ function parseArgs(argv) {
  * 不启动游戏服务本身，处理完即退出。
  */
 async function runSetup(mode, opts = {}) {
-  const dataDir = resolve(ROOT, 'data');
-  mkdirSync(dataDir, { recursive: true });
+  // 数据目录不再是 <安装目录>/data（装到 Program Files 时那儿不可写），而是用户目录下的 JicanSimulator/
+  const dataDirPath = dataDir();
+  mkdirSync(dataDirPath, { recursive: true });
   const wantServer = mode === 'server';
 
   // ---- 1) 强制检测 TailScale

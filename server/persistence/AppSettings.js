@@ -3,10 +3,10 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { dataDirOf } from './OnlineConfig.js';
+import { dataDir } from './paths.js';
 
-// 数据目录解析与 OnlineConfig 一致：SEA 运行时由 entry 提供 <exe目录>/data
-const FILE = (rootDir) => join(dataDirOf(rootDir), 'settings.json');
+// 数据目录与 OnlineConfig 一致（见 persistence/paths.js）：开发期 = <仓库根>/data，SEA = %LOCALAPPDATA%\JicanSimulator
+const FILE = (_rootDir) => join(dataDir(), 'settings.json');
 
 const DEFAULTS = Object.freeze({ installed: false, isServerSource: false, serverUrl: '', askedServerSource: false, setupAt: null });
 

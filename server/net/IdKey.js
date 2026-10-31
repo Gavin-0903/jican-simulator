@@ -7,6 +7,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { networkInterfaces, tmpdir, type } from 'node:os';
+import { dataDir } from '../persistence/paths.js';
 
 const KEY_RE = /^[0-9a-f]{256}$/;
 
@@ -57,9 +58,9 @@ export function isValidIdKey(key) {
   return typeof key === 'string' && KEY_RE.test(key);
 }
 
-/** 密钥文件位置：便携版放在 exe 同级 data/，开发环境放在 data/。 */
-export function idKeyPath(rootDir) {
-  return join(rootDir, 'data', 'id.key');
+/** 密钥文件位置：与其余运行期数据同目录（dev = <仓库根>/data，SEA = %LOCALAPPDATA%\JicanSimulator）。 */
+export function idKeyPath(_rootDir) {
+  return join(dataDir(), 'id.key');
 }
 
 /** 读取或首次生成；返回 { key, created }。 */

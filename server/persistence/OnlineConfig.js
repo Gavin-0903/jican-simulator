@@ -5,21 +5,20 @@
 // 合并后交给服务端，效果等价于「修改 config.json 开启联机功能」，但不会污染基线。
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
+import { dataDir } from './paths.js';
 
 /**
- * 数据目录：SEA 单文件运行时由 entry 设置 globalThis.__JICAN_DATA_DIR__（= <exe目录>/data）。
- * 未设置时按开发期约定落到 <rootDir>/data —— 源码运行时 rootDir 是仓库根，
- * 两者结果一致，但 SEA 里 rootDir 是 <exe目录>/data/unpacked，必须靠全局变量指回外层，
- * 否则安装器写进 data/config.json 的联机配置会被丢到 unpacked/data/ 下，重启后读不到。
+ * 数据目录（真正的可写目录，见 persistence/paths.js）：
+ *   - 开发期 = <仓库根>/data
+ *   - SEA = %LOCALAPPDATA%\JicanSimulator（安装到 Program Files 时无权写安装目录，见 paths.js 注释）
+ * rootDir 参数保留只为兼容旧调用点，实际路径不再依赖它。
  */
-export function dataDirOf(rootDir) {
-  const g = globalThis.__JICAN_DATA_DIR__;
-  if (typeof g === 'string' && g) return g;
-  return join(rootDir, 'data');
+export function dataDirOf(_rootDir) {
+  return dataDir();
 }
 
-const FILE = (rootDir) => join(dataDirOf(rootDir), 'config.json');
+const FILE = (_rootDir) => join(dataDir(), 'config.json');
 
 export const ONLINE_DEFAULTS = Object.freeze({
   enabled: false,

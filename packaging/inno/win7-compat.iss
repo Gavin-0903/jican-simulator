@@ -12,6 +12,8 @@
 #define MyAppName "机惨模拟器"
 #define MyAppVariant "Win7兼容"
 #define MyAppExeName "jican-simulator.exe"
+; 玩家双击的入口（无黑框）：launch.exe 外壳，内部再拉起 MyAppExeName。
+#define MyLaunchExeName "jican-simulator-launcher.exe"
 #ifndef MyAppVersion
   #define MyAppVersion "0.1dev"
 #endif
@@ -49,14 +51,16 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 
 [Files]
 Source: "..\..\dist\win7-compat\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\dist\win7-compat\{#MyLaunchExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\dist\win7-compat\assets.json"; DestDir: "{app}"; Flags: ignoreversion
 
 
 [Icons]
-Name: "{group}\{#MyAppName} {#MyAppVariant}版"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName} {#MyAppVariant}版"; Filename: "{app}\{#MyLaunchExeName}"; IconFilename: "{app}\{#MyLaunchExeName}"
 Name: "{group}\{#MyAppName} {#MyAppVariant}版（一键联机配置）"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--setup --server-source"; IconFilename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName} {#MyAppVariant}版（调试窗口）"; Filename: "{app}\{#MyLaunchExeName}"; Parameters: "--debug"; IconFilename: "{app}\{#MyLaunchExeName}"
 Name: "{group}\卸载 {#MyAppName} {#MyAppVariant}版"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName} {#MyAppVariant}版"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName} {#MyAppVariant}版"; Filename: "{app}\{#MyLaunchExeName}"; IconFilename: "{app}\{#MyLaunchExeName}"; Tasks: desktopicon
 
 [Run]
 ; 首次配置：--setup 会强制检测 TailScale（tailscale -v）。
@@ -64,7 +68,7 @@ Name: "{autodesktop}\{#MyAppName} {#MyAppVariant}版"; Filename: "{app}\{#MyAppE
 ;        之后每次启动游戏都会自动确保 TailScale 服务在跑；
 ;   没有 → 退出码 3（SETUP_RESULT.tailscale=false），[Code] 的 HandleSetupResult 会询问是否下载安装。
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--setup --server-source"; WorkingDir: "{app}"; Description: "完成首次配置（检测 TailScale 并开启联机）"; Flags: runhidden waituntilterminated; AfterInstall: HandleSetupResult
-Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Description: "启动 {#MyAppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyLaunchExeName}"; WorkingDir: "{app}"; Description: "启动 {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\data"

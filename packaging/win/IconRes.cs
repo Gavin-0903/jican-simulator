@@ -7,7 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 
-static class IconRes
+public static class IconRes
 {
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     static extern IntPtr BeginUpdateResource(string pFileName, bool bDeleteExistingResources);
@@ -25,56 +25,52 @@ static class IconRes
         string exePath = args[0], icoPath = args[1];
         string version = args.Length > 2 ? args[2] : null;
 
+        IntPtr h = BeginUpdateResource(exePath, false);
+        if (h == IntPtr.Zero) { Console.Error.WriteLine("BeginUpdateResource failed " + Marshal.GetLastWin32Error()); return 4; }
+        bool ok = WriteIcon(h, icoPath);
+        if (version != null) ok &= WriteVersion(h, version);
+        if (!EndUpdateResource(h, false)) { Console.Error.WriteLine("EndUpdateResource failed " + Marshal.GetLastWin32Error()); return 5; }
+        if (!ok) { Console.Error.WriteLine("UpdateResource failed"); return 6; }
+        Console.WriteLine("icon resources written: " + exePath);
+        return 0;
+    }
+
+    /// 把 .ico 的各帧与分组写进已打开的更新句柄（RT_ICON + RT_GROUP_ICON）。
+    public static bool WriteIcon(IntPtr h, string icoPath, ushort lang = LANG)
+    {
         byte[] ico = File.ReadAllBytes(icoPath);
-        if (ico.Length < 6 || BitConverter.ToUInt16(ico, 2) != 1) { Console.Error.WriteLine("not an .ico"); return 3; }
+        if (ico.Length < 6 || BitConverter.ToUInt16(ico, 2) != 1) { Console.Error.WriteLine("not an .ico"); return false; }
         int count = BitConverter.ToUInt16(ico, 4);
-
-        var images = new List<byte[]>();
-        for (int i = 0; i < count; i++)
-        {
-            int off = 6 + i * 16;
-            uint size = BitConverter.ToUInt32(ico, off + 8);
-            uint dataOff = BitConverter.ToUInt32(ico, off + 12);
-            var buf = new byte[size];
-            Array.Copy(ico, (int)dataOff, buf, 0, (int)size);
-            images.Add(buf);
-        }
-
-        byte[] group;
-        using (var gm = new MemoryStream())
+        bool ok = true;
+        var group = new byte[6 + count * 14];
+        using (var gm = new MemoryStream(group))
         using (var gw = new BinaryWriter(gm))
         {
             gw.Write((ushort)0); gw.Write((ushort)1); gw.Write((ushort)count);
             for (int i = 0; i < count; i++)
             {
                 int off = 6 + i * 16;
-                gw.Write(ico[off]);
-                gw.Write(ico[off + 1]);
-                gw.Write(ico[off + 2]);
-                gw.Write(ico[off + 3]);
+                uint size = BitConverter.ToUInt32(ico, off + 8);
+                uint dataOff = BitConverter.ToUInt32(ico, off + 12);
+                var buf = new byte[size];
+                Array.Copy(ico, (int)dataOff, buf, 0, (int)size);
+                ok &= UpdateResource(h, (IntPtr)3, (IntPtr)(i + 1), lang, buf, (uint)buf.Length);   // RT_ICON
+                gw.Write(ico[off]); gw.Write(ico[off + 1]); gw.Write(ico[off + 2]); gw.Write(ico[off + 3]);
                 gw.Write(BitConverter.ToUInt16(ico, off + 4));
                 gw.Write(BitConverter.ToUInt16(ico, off + 6));
                 gw.Write(BitConverter.ToUInt32(ico, off + 8));
                 gw.Write((ushort)(i + 1));
             }
-            group = gm.ToArray();
         }
+        ok &= UpdateResource(h, (IntPtr)14, (IntPtr)1, lang, group, (uint)group.Length);        // RT_GROUP_ICON
+        return ok;
+    }
 
-        IntPtr h = BeginUpdateResource(exePath, false);
-        if (h == IntPtr.Zero) { Console.Error.WriteLine("BeginUpdateResource failed " + Marshal.GetLastWin32Error()); return 4; }
-        bool ok = true;
-        for (int i = 0; i < images.Count; i++)
-            ok &= UpdateResource(h, (IntPtr)3, (IntPtr)(i + 1), LANG, images[i], (uint)images[i].Length);   // RT_ICON
-        ok &= UpdateResource(h, (IntPtr)14, (IntPtr)1, LANG, group, (uint)group.Length);                    // RT_GROUP_ICON
-        if (version != null)
-        {
-            byte[] vi = BuildVersion(version);
-            ok &= UpdateResource(h, (IntPtr)16, (IntPtr)1, LANG, vi, (uint)vi.Length);                      // RT_VERSION
-        }
-        if (!EndUpdateResource(h, false)) { Console.Error.WriteLine("EndUpdateResource failed " + Marshal.GetLastWin32Error()); return 5; }
-        if (!ok) { Console.Error.WriteLine("UpdateResource failed"); return 6; }
-        Console.WriteLine("icon resources written: " + exePath);
-        return 0;
+    /// 写 RT_VERSION（VS_VERSIONINFO）。
+    public static bool WriteVersion(IntPtr h, string version, ushort lang = LANG)
+    {
+        byte[] vi = BuildVersion(version);
+        return UpdateResource(h, (IntPtr)16, (IntPtr)1, lang, vi, (uint)vi.Length);
     }
 
     /// 最小 VS_VERSIONINFO 构建器。

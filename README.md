@@ -18,15 +18,16 @@
 
 | 安装包 | 目标平台 | 说明 |
 | --- | --- | --- |
-| `机惨模拟器-Win10满血-v0.2beta-setup-1031.exe` | Windows 10 / 11 x64 | 单文件自带运行时（Node SEA），**满血版**：内嵌 `ws`，无需安装 Node.js |
-| `机惨模拟器-Win7兼容-v0.1dev-setup-1031.exe` | Windows 7 SP1 x86 / x64 | **兼容版**：安装目录同样自带 exe，Node 20+ 二进制不支持 Win7，因此运行期退回系统 Node.js（需先装 Node 18） |
+| `机惨模拟器-Win10满血-v0.3.0-setup-1031.exe` | Windows 10 / 11 x64 | 单文件自带运行时（Node SEA），**满血版**：内嵌 `ws`，无需安装 Node.js |
+| `机惨模拟器-Win7兼容-v0.3.0-setup-1031.exe` | Windows 7 SP1 x86 / x64 | **兼容版**：安装目录同样自带 exe，Node 20+ 二进制不支持 Win7，因此运行期退回系统 Node.js（需先装 Node 18） |
 
 - 两个安装包都声明 `PrivilegesRequired=admin`，**非管理员运行时会自动弹出 UAC 提权**（内部提权）。
 - 主程序统一叫 **`jican-simulator.exe`**（两个 flavor 同名），图标与版本信息由 `packaging/win/IconRes.cs` 在打包后写入 PE 资源段（`RT_GROUP_ICON` + `RT_VERSION`）。
+- **双击请用 `jican-simulator-launcher.exe`**（开始菜单与桌面快捷方式都指向它）：它是 GUI 子系统的外壳，启动时不会弹黑框；它拉起 `jican-simulator.exe --serve` 后自己退出。直接双击 `jican-simulator.exe` 仍然可用，但会带一个黑窗口，关掉黑窗口服务就停。
 - **安装即开联机（v0.3）**：安装向导先检查 `%ProgramFiles%\Tailscale\tailscale.exe`；
   - 已安装 → 装完自动以 `jican-simulator.exe --setup --server-source` 跑一次，检测 TailScale、生成 256 位 Token、写 `data/config.json`，并用 `tailscale serve --bg 5173` 暴露给同一 tailnet。
   - 未安装 → 弹窗询问是否去下载；同意则打开 https://tailscale.com/download/windows，装完双击开始菜单里的「**机惨模拟器（一键联机配置）**」即可补做。
-- 静默安装：`"机惨模拟器-Win10满血-v0.2beta-setup-1031.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`。
+- 静默安装：`"机惨模拟器-Win10满血-v0.3.0-setup-1031.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`。
 
 打包命令：
 
@@ -172,7 +173,7 @@ npm run check-llm
 | `server/net/` | HTTP/WebSocket、协议校验、**ID 密钥、房间管理、联机大厅路由** |
 | `server/persistence/` | 配置装载与热重载、原子存档、**安装设置（服务器源）** |
 | `client/` | `index.html` + 原生 ES Module：渲染、输入、状态镜像、UI 组件（含 `ItemShop`/`ItemBar`/`HackPanel`/`NetPanel`）；`assets/` 自绘 SVG |
-| `packaging/` | SEA 打包入口（`sea-entry.cjs`）、资源收集（`build.mjs`）、图标生成（`icons/make-icon.py`）、PE 资源注入（`win/IconRes.cs`）、Inno Setup 双脚本 |
+| `packaging/` | SEA 打包入口（`sea-entry.cjs`）、资源收集（`build.mjs`）、图标生成（`icons/make-icon.py`）、PE 资源注入（`win/IconRes.cs`）、**无黑框外壳（`win/Launch.cs` + `win/LaunchGen.cs` + `launcher.cjs`）**、Inno Setup 双脚本 |
 | `tests/` | `unit/` 规则与工具；`integration/` 确定性回放、存档续局、真实 WS/HTTP、LLM 降级 |
 
 更多文档：[实现说明 v0.2](docs/实现说明-v0.2.md) · [WebSocket 协议](docs/protocol/websocket-protocol.md) · [验收记录 v0.2](docs/验收记录-v0.2.md) · [实现说明 v0.1](docs/实现说明-v0.1.md)。
@@ -182,5 +183,6 @@ npm run check-llm
 - **安装即联机**：安装包装完自动跑 `--setup --server-source`，本机成为服务器源并通过 `tailscale serve` 暴露给 tailnet；检测不到 TailScale 时向导询问并引导下载。
 - **设置页联机区块**：显示服务器地址 / Token 状态，可一键在 Serve（仅 tailnet）与 Funnel（公网）之间切换，失败原因就地展示。
 - **发行物**：主程序改名 `jican-simulator.exe`（两个 flavor 同名），自绘图标（深蓝圆角方块 + 蓝色显示器 + 黄色感叹号）写入 exe；PE 版本信息为 `机惨模拟器 / jican-simulator.exe`。
-- **数据目录修正**：单文件 exe 的 `data/` 固定落在 exe 同级的 `data/`（不再嵌套 `data/unpacked/data/`）。
+- **数据目录迁移到用户目录**：安装到 `C:\Program Files` 后安装目录对普通用户只读（`BUILTIN\Users:(RX)`），旧的 `<exe目录>/data` 一落盘就 `EPERM`。现在资源（`server/client/config`）仍是安装时静态展开的 `<exe目录>/data/unpacked`（只读），**运行期可写数据统一在 `%LOCALAPPDATA%\JicanSimulator\`**（`config.json` / `settings.json` / `id.key` / `saves/` / `logs/`），可用环境变量 `JICAN_DATA_DIR` 覆盖（便携版、共享电脑、CI）。
+- **无黑框启动（新增 `jican-simulator-launcher.exe`）**：Node SEA 产物必然是控制台程序，双击必弹黑框、关掉黑框服务就停。发行版因此拆成两层——`jican-simulator-launcher.exe` 是 GUI 子系统（`/target:winexe`）外壳，内嵌一份 node 运行时与启动脚本，首次运行释放到 `%LOCALAPPDATA%\JicanSimulator\runtime\rt-<指纹>\`，再用 `CREATE_NO_WINDOW` 拉起 `jican-simulator.exe --serve`。**快捷方式指向 launcher**；需要看日志时用开始菜单的「（调试窗口）」项（等价于 `launch -debug`，会保留黑窗口）。
 - **修复**：单文件 exe 下 `--setup` 参数被静默忽略（`isMain` 判定在 SEA 里永不成立）；设置页点击 ⚙ 无法打开（`buildBody` 的 `this` 丢失导致 `Cannot read properties of undefined (reading 'net')`）。

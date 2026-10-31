@@ -4,6 +4,7 @@
 
 import { existsSync, readFileSync, watchFile, unwatchFile } from 'node:fs';
 import { join } from 'node:path';
+import { dataDir } from './paths.js';
 
 const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'));
 
@@ -131,7 +132,7 @@ export function validateConfig(obj, rules, label) {
 }
 
 function readOverride(rootDir) {
-  const file = join(rootDir, 'data', 'override.json');
+  const file = join(dataDir(), 'override.json');
   if (!existsSync(file)) return {};
   try {
     return readJson(file);
@@ -172,7 +173,7 @@ export function loadConfig(rootDir, { logger = console } = {}) {
 
 /** 监听 balance.json 与 data/override.json，变化时重新装载并回调（非法则保留旧值）。 */
 export function watchBalance(rootDir, onChange, { logger = console, intervalMs = 1000 } = {}) {
-  const files = [join(rootDir, 'config', 'balance.json'), join(rootDir, 'data', 'override.json')];
+  const files = [join(rootDir, 'config', 'balance.json'), join(dataDir(), 'override.json')];
   const handler = (cur, prev) => {
     if (cur.mtimeMs === prev.mtimeMs) return;
     try {

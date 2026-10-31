@@ -156,4 +156,52 @@ if (existsSync(exePath) && ensureIconTool()) {
 if (existsSync(exePath)) {
   console.log(`[build] 产物：${exePath} (${(statSync(exePath).size / 1048576).toFixed(1)} MB)`);
 }
-writeFileSync(join(JSON_OUT, 'build-info.json'), JSON.stringify({ ...manifest, exe: exePath, setupName, stamp }, null, 2));
+
+// ---- launch.exe：无黑框启动外壳（GUI 子系统的 C# 外壳 + 内嵌 node 运行时 + launcher.cjs）
+// 玩家双击的是 launch.exe；jican-simulator.exe 是它拉起来的真正服务端（控制台程序，正常模式下隐藏窗口）。
+// 为什么要这一层：Node SEA 产物必然是控制台程序，双击必弹黑框，关掉黑框服务就停；
+// Windows 不允许一个进程既是 GUI 又是控制台，所以拆成「GUI 外壳 + 无窗口子进程」。
+const launchSrc = join(ROOT, 'packaging', 'win', 'Launch.cs');
+const launchGenSrc = join(ROOT, 'packaging', 'win', 'LaunchGen.cs');
+const binDir = join(ROOT, 'packaging', 'win', 'bin');
+const launchStub = join(binDir, 'Launch.exe');
+const launchGen = join(binDir, 'LaunchGen.exe');
+const launcherJs = join(ROOT, 'packaging', 'launcher.cjs');
+const launchExe = join(JSON_OUT, EXE_BASENAME + '-launcher.exe');
+
+function ensureLaunchTools() {
+  if (!existsSync(launchSrc) || !existsSync(launchGenSrc) || !existsSync(launcherJs)) {
+    console.warn('[build] 缺少启动器源码，跳过 launch.exe 生成');
+    return false;
+  }
+  if (!existsSync(csc)) {
+    console.warn('[build] 找不到 csc.exe，跳过 launch.exe 生成');
+    return false;
+  }
+  mkdirSync(binDir, { recursive: true });
+  const refs = ['/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll'];
+  const stale = (src, out) => !existsSync(out) || statSync(src).mtimeMs > statSync(out).mtimeMs;
+  ensureIconTool(); // LaunchGen 引用 IconRes.exe，必须先编译出来
+  if (stale(launchSrc, launchStub)) {
+    console.log('[build] 编译 GUI 外壳 Launch.exe…');
+    // 必须 /target:winexe（Subsystem=2），否则双击仍然弹黑框
+    execFileSync(csc, ['/nologo', '/target:winexe', '/out:' + launchStub, ...refs, launchSrc], { stdio: 'inherit' });
+  }
+  if (stale(launchGenSrc, launchGen) || stale(launchSrc, launchGen)) {
+    console.log('[build] 编译外壳生成器 LaunchGen.exe…');
+    execFileSync(csc, ['/nologo', '/target:exe', '/out:' + launchGen, '/reference:' + iconExe, ...refs, launchGenSrc], { stdio: 'inherit' });
+  }
+  return true;
+}
+
+let launcherExe = null;
+if (existsSync(exePath) && ensureLaunchTools()) {
+  console.log('[build] 生成 launch.exe（内嵌运行时 + 启动脚本）…');
+  const lver = version.replace(/[^0-9.]/g, '') || '0.0.0';
+  execFileSync(launchGen, [launchExe, exePath, launcherJs, iconIco, lver], { stdio: 'inherit' });
+  if (existsSync(launchExe)) {
+    launcherExe = launchExe;
+    console.log('[build] 启动器：' + launchExe + ' (' + (statSync(launchExe).size / 1048576).toFixed(1) + ' MB)');
+  }
+}
+writeFileSync(join(JSON_OUT, 'build-info.json'), JSON.stringify({ ...manifest, exe: exePath, launcher: launcherExe, setupName, stamp }, null, 2));
