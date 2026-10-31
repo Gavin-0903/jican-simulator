@@ -14,5 +14,17 @@
   },
   "save": { "everyMs": 5000, "keepRounds": 10, "dir": "data/saves" },
   "loop": { "maxCatchUpSteps": 5, "speeds": [0.5, 1, 2] },
+  "online": {
+    "enabled": false,
+    "mode": "serve",
+    "serverUrl": "",
+    "token": "",
+    "port": 5173,
+    "tailscale": {
+      "autoStart": true,
+      "expose": "serve",
+      "bg": true
+    }
+  },
   "debug": { "endpoints": true }
 }

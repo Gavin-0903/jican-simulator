@@ -30,7 +30,10 @@ const variant = arg('variant', isWin7 ? '7' : '10');
 const version = arg('version', isWin7 ? '0.1dev' : '0.2beta');
 const stamp = arg('stamp', isWin7 ? '1031' : '1031');
 const productName = isWin7 ? '机惨模拟器-Win7兼容' : '机惨模拟器-Win10满血';
-const exeName = `${productName}-v${version}-setup-${stamp}`;
+// 可执行文件统一叫 jican-simulator.exe（用户要求）；变体名只体现在安装包文件名与安装目录上，
+// 这样两个 flavor 的 exe 名称一致，快捷方式/任务管理器里看到的名字也一致。
+const EXE_BASENAME = 'jican-simulator';
+const exeName = EXE_BASENAME;
 const appId = isWin7 ? '{{7A5B2C10-3E44-4B7E-9F11-91C0DA7A1007}}' : '{{7A5B2C10-3E44-4B7E-9F11-91C0DA7A1010}}';
 
 const JSON_OUT = arg('out', join(ROOT, 'dist', flavor));
@@ -83,7 +86,9 @@ for (const pkg of INCLUDE_PKGS) {
 
 const assets = {};
 for (const rel of files) assets[rel] = readFileSync(join(ROOT, rel)).toString('base64');
-const manifest = { flavor, variant, version, exeName, productName, appId, builtAt: new Date().toISOString(), files: files.length };
+// manifest 里显式写明安装包名，供 .iss 生成时的 [Run]/快捷方式引用
+const setupName = `${productName}-v${version}-setup-${stamp}`;
+const manifest = { flavor, variant, version, exeName, setupName, productName, appId, builtAt: new Date().toISOString(), files: files.length };
 writeFileSync(join(JSON_OUT, 'assets.json'), JSON.stringify({ manifest, assets }));
 console.log(`[build] 收集 ${files.length} 个文件 → ${join('dist', flavor, 'assets.json')}`);
 
@@ -114,8 +119,41 @@ const postject = join(ROOT, 'node_modules', 'postject', 'dist', 'cli.js');
 if (existsSync(postject)) {
   console.log('[build] postject 注入 SEA blob…');
   execFileSync(process.execPath, [postject, exePath, 'NODE_SEA_BLOB', join(JSON_OUT, 'sea-prep.blob'), '--sentinel-fuse', 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2'], { stdio: 'inherit' });
-  console.log(`[build] 产物：${exePath} (${(statSync(exePath).size / 1048576).toFixed(1)} MB)`);
+  console.log(`[build] 注入完成：${exePath} (${(statSync(exePath).size / 1048576).toFixed(1)} MB)`);
 } else {
   console.warn('[build] 未安装 postject，跳过注入（npm i -D postject 后重跑）');
 }
-writeFileSync(join(JSON_OUT, 'build-info.json'), JSON.stringify({ ...manifest, exe: exePath, stamp }, null, 2));
+
+// 图标与版本信息：postject 只改 blob 段，图标/版本要单独写入资源节。
+// IconRes.exe 由本脚本按需从 packaging/win/IconRes.cs 编译（.NET Framework 自带的 csc）。
+const iconSrc = join(ROOT, 'packaging', 'win', 'IconRes.cs');
+const iconExe = join(ROOT, 'packaging', 'win', 'bin', 'IconRes.exe');
+const iconIco = join(ROOT, 'packaging', 'icons', 'jican-simulator.ico');
+const csc = 'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe';
+function ensureIconTool() {
+  if (!existsSync(iconSrc) || !existsSync(iconIco)) {
+    console.warn('[build] 缺少图标源文件，跳过图标注入');
+    return false;
+  }
+  const needCompile = !existsSync(iconExe) || statSync(iconSrc).mtimeMs > statSync(iconExe).mtimeMs;
+  if (needCompile) {
+    if (!existsSync(csc)) {
+      console.warn('[build] 找不到 csc.exe，跳过图标注入');
+      return false;
+    }
+    mkdirSync(dirname(iconExe), { recursive: true });
+    console.log('[build] 编译图标注入器 IconRes.exe…');
+    execFileSync(csc, ['/nologo', '/target:exe', `/out:${iconExe}`, iconSrc], { stdio: 'inherit' });
+  }
+  return true;
+}
+if (existsSync(exePath) && ensureIconTool()) {
+  // VS 数值版本取 semver 数值前缀（0.2beta → 0.2.0.0），字符串版本保留原样
+  const verText = version.replace(/[^0-9.]/g, '') || '0.0.0';
+  execFileSync(iconExe, [exePath, iconIco, verText], { stdio: 'inherit' });
+  console.log(`[build] 图标与版本信息已写入（${verText}）`);
+}
+if (existsSync(exePath)) {
+  console.log(`[build] 产物：${exePath} (${(statSync(exePath).size / 1048576).toFixed(1)} MB)`);
+}
+writeFileSync(join(JSON_OUT, 'build-info.json'), JSON.stringify({ ...manifest, exe: exePath, setupName, stamp }, null, 2));

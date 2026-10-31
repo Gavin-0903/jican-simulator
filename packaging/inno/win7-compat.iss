@@ -1,14 +1,17 @@
 ; 机惨模拟器 — Windows 7 兼容版安装包（Inno Setup 6）
-; 与满血版的差别：
-;  - MinVersion=6.1（Win7 SP1）+ 仅 x86 安装模式，避免 64 位路径在老系统上的兼容问题；
-;  - 不依赖任何 Win10 专属 API，程序本体用 --no-sandbox 友好参数启动。
+; 用 ISCC.exe 编译：ISCC.exe win7-compat.iss
 ;
-; 注意：Node 20+ 官方二进制已不支持 Win7。本分支提供的是「源码 + 启动脚本」形态的兼容包
-; （内嵌 node.exe 若在 Win7 上缺失，会退回用系统里的 node 运行 server/index.js 并给出提示）。
+; 关键点：
+;  - Setup 自身带 PrivilegesRequired=admin，非管理员双击时 Windows 会要求提权（UAC），
+;    这就是需求里「非管理员运行时自动提权」的落地方式。
+;  - 主程序统一叫 jican-simulator.exe（用户要求），变体差异只体现在安装包名/安装目录/开始菜单项上。
+;  - 装完后以 --setup --server-source 静默调用主程序：
+;    强制检测 TailScale → 建 data/ → 写 data/config.json 开启联机 → 把本机设成服务器源
+;    （默认 Serve，可在软件设置页切换为 Funnel）→ 退出码 3 表示「没装 TailScale」，[Code] 随即询问是否下载安装。
 
 #define MyAppName "机惨模拟器"
 #define MyAppVariant "Win7兼容"
-#define MyAppExeName "机惨模拟器-Win7兼容-v0.1dev-setup-1031.exe"
+#define MyAppExeName "jican-simulator.exe"
 #ifndef MyAppVersion
   #define MyAppVersion "0.1dev"
 #endif
@@ -18,12 +21,15 @@ AppId={{7A5B2C10-3E44-4B7E-9F11-91C0DA7A1007}
 AppName={#MyAppName} {#MyAppVariant}版
 AppVersion={#MyAppVersion}
 AppPublisher=机惨模拟器小组
+AppPublisherURL=https://github.com/Gavin-0903/jican-simulator
+AppSupportURL=https://github.com/Gavin-0903/jican-simulator
 DefaultDirName={sd}\JicanSimulator7
-DefaultGroupName={#MyAppName}
+DefaultGroupName={#MyAppName} {#MyAppVariant}
 DisableProgramGroupPage=yes
 OutputDir=..\..\dist\inno
 OutputBaseFilename=机惨模拟器-Win7兼容-v{#MyAppVersion}-setup-1031
 UninstallDisplayIcon={app}\{#MyAppExeName}
+SetupIconFile=..\icons\jican-simulator.ico
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -31,6 +37,9 @@ PrivilegesRequired=admin
 ArchitecturesAllowed=x86 x64
 ArchitecturesInstallIn64BitMode=
 MinVersion=6.1
+CloseApplications=yes
+; 静默安装也写日志：{localappdata} 是普通用户可写目录，避免 SetupLogging 因权限静默失败
+SetupLogging=yes
 
 [Languages]
 Name: "en"; MessagesFile: "compiler:Default.isl"
@@ -42,14 +51,60 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Source: "..\..\dist\win7-compat\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\dist\win7-compat\assets.json"; DestDir: "{app}"; Flags: ignoreversion
 
+
 [Icons]
-Name: "{group}\{#MyAppName} {#MyAppVariant}版"; Filename: "{app}\{#MyAppExeName}"
-Name: "{group}\卸载 {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName} {#MyAppVariant}版"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\{#MyAppName} {#MyAppVariant}版"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName} {#MyAppVariant}版（一键联机配置）"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--setup --server-source"; IconFilename: "{app}\{#MyAppExeName}"
+Name: "{group}\卸载 {#MyAppName} {#MyAppVariant}版"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\{#MyAppName} {#MyAppVariant}版"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Parameters: "--setup"; Description: "完成首次配置（询问是否设为服务器源）"; Flags: runhidden waituntilterminated
-Filename: "{app}\{#MyAppExeName}"; Description: "启动 {#MyAppName}"; Flags: nowait postinstall skipifsilent
+; 首次配置：--setup 会强制检测 TailScale（tailscale -v）。
+;   有 → 建 data/、写 data/config.json 开启联机、把本机设成服务器源（默认 Serve，可改 Funnel），
+;        之后每次启动游戏都会自动确保 TailScale 服务在跑；
+;   没有 → 退出码 3（SETUP_RESULT.tailscale=false），[Code] 的 HandleSetupResult 会询问是否下载安装。
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--setup --server-source"; WorkingDir: "{app}"; Description: "完成首次配置（检测 TailScale 并开启联机）"; Flags: runhidden waituntilterminated; AfterInstall: HandleSetupResult
+Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Description: "启动 {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\data"
+
+[Code]
+const
+  TailScaleDownloadUrl = 'https://tailscale.com/download/windows';
+
+{ TailScale 官方安装包固定装在 Program Files\Tailscale 下。 }
+function TailScalePresent: Boolean;
+begin
+  Result := FileExists(ExpandConstant('{pf}\Tailscale\tailscale.exe'));
+  if not Result then
+    Result := FileExists(ExpandConstant('{pf32}\Tailscale\tailscale.exe'));
+end;
+
+{ 没装 TailScale：询问是否打开官方下载页。 }
+procedure AskInstallTailScale;
+var
+  ErrCode: Integer;
+begin
+  if MsgBox('未检测到 TailScale。' + #13#10 + #13#10 +
+            'TailScale 用于把多台电脑连成一张虚拟内网。装好后本程序可以一键变身为联机服务器，' + #13#10 +
+            '其他同学只要填服务器地址即可加入，不需要公网 IP、不用配路由器。' + #13#10 + #13#10 +
+            '是否现在打开官方下载页？', mbConfirmation, MB_YESNO) = IDYES then
+  begin
+    if not ShellExec('open', TailScaleDownloadUrl, '', '', SW_SHOWNORMAL, ewNoWait, ErrCode) then
+      MsgBox('打开浏览器失败，请手动访问：' + TailScaleDownloadUrl, mbInformation, MB_OK)
+    else
+      MsgBox('安装并登录 TailScale 后，双击开始菜单里的「{#MyAppName} {#MyAppVariant}版（一键联机配置）」' + #13#10 +
+             '即可自动完成联机设置（等价于命令行 jican-simulator.exe --setup --server-source）。',
+             mbInformation, MB_OK);
+  end;
+end;
+
+{ 首次配置的善后：环境里没有 TailScale 时提示安装。
+  上面的 [Run] 已经跑过一次 --setup，这里再探测一次安装路径，
+  只做询问，不重复改配置（配置已由 --setup 按「无 TailScale」写好并关闭联机）。 }
+procedure HandleSetupResult;
+begin
+  if not TailScalePresent then
+    AskInstallTailScale;
+end;

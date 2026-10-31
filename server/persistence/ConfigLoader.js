@@ -55,6 +55,10 @@ const APP_RULES = [
   ['net.maxMessageBytes', int(256, 1 << 20)],
   ['net.rateLimitPerSec', pos],
   ['save.everyMs', pos],
+  // 联机（v0.3）：默认关闭；开启后本机作为服务器源，用 TailScale serve/funnel 对外暴露。
+  ['online.enabled', (v) => typeof v === 'boolean'],
+  ['online.mode', (v) => v === 'serve' || v === 'funnel'],
+  ['online.port', int(1, 65535)],
 ];
 
 const BALANCE_RULES = [

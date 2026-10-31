@@ -3,8 +3,10 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { dataDirOf } from './OnlineConfig.js';
 
-const FILE = (rootDir) => join(rootDir, 'data', 'settings.json');
+// 数据目录解析与 OnlineConfig 一致：SEA 运行时由 entry 提供 <exe目录>/data
+const FILE = (rootDir) => join(dataDirOf(rootDir), 'settings.json');
 
 const DEFAULTS = Object.freeze({ installed: false, isServerSource: false, serverUrl: '', askedServerSource: false, setupAt: null });
 

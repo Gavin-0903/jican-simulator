@@ -4,6 +4,8 @@
 
 **v0.2 新增**：5 件道具的系统、输入控制加固（禁用剪贴板 + 输入法强制英文）、TailScale Funnel 联机（房间 / ID 密钥 / 违规封禁）、Windows 双安装包发行版。
 
+**v0.3 新增**：安装后**强制检测 TailScale 并自动开启联机**（缺 TailScale 时安装向导询问并引导下载）、软件内「设置 → 输入与联机」一键切 Serve / Funnel、主程序改名 `jican-simulator.exe` 并写入自绘图标与版本信息。
+
 - **服务端权威**：Node.js 固定 10 Hz 逻辑帧，玩家和 AI 走同一条指令队列、同一套规则。道具的购买、升级、使用、结算全部在服务端判定。
 - **原生 SVG**：地图、角色、图标全部自绘，前端零构建、零外网请求，离线可玩。
 - **视野遮挡**：墙、隔板、柜子等完全挡住视线；桌子、沙发能藏住紧贴在后面的人。看不到的区域显示为黑色。
@@ -20,7 +22,10 @@
 | `机惨模拟器-Win7兼容-v0.1dev-setup-1031.exe` | Windows 7 SP1 x86 / x64 | **兼容版**：安装目录同样自带 exe，Node 20+ 二进制不支持 Win7，因此运行期退回系统 Node.js（需先装 Node 18） |
 
 - 两个安装包都声明 `PrivilegesRequired=admin`，**非管理员运行时会自动弹出 UAC 提权**（内部提权）。
-- 首次安装会在 `[Run]` 阶段以 `--setup` 静默调用一次主程序，询问**「是否把本机设为服务器源」**；回答结果写入 `data/settings.json`。
+- 主程序统一叫 **`jican-simulator.exe`**（两个 flavor 同名），图标与版本信息由 `packaging/win/IconRes.cs` 在打包后写入 PE 资源段（`RT_GROUP_ICON` + `RT_VERSION`）。
+- **安装即开联机（v0.3）**：安装向导先检查 `%ProgramFiles%\Tailscale\tailscale.exe`；
+  - 已安装 → 装完自动以 `jican-simulator.exe --setup --server-source` 跑一次，检测 TailScale、生成 256 位 Token、写 `data/config.json`，并用 `tailscale serve --bg 5173` 暴露给同一 tailnet。
+  - 未安装 → 弹窗询问是否去下载；同意则打开 https://tailscale.com/download/windows，装完双击开始菜单里的「**机惨模拟器（一键联机配置）**」即可补做。
 - 静默安装：`"机惨模拟器-Win10满血-v0.2beta-setup-1031.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`。
 
 打包命令：
@@ -91,10 +96,10 @@ npm run dist:win7
 2. `Ctrl/Cmd + A/C/V/X`、`Ctrl+Insert`、`Shift+Insert` 在 `InputManager` 里最先 `preventDefault()`。
 3. 输入法强制英文：`ime-mode: disabled` + `forceEnglishInput()` 对所有 `input`/`textarea`/`contentEditable` 生效 + `MutationObserver` 跟踪新插入的输入框 + `compositionstart` 打断中文候选。
 
-## 联机（TailScale Funnel P2P）
+## 联机（TailScale Serve / Funnel）
 
-1. 用 TailScale 把本机对公网暴露：`tailscale funnel 5173`，得到一个 `https://xxxxx.ts.net`。
-2. 安装时（或手动 `--server-source`）把某台机器设为**服务器源**；它会监听 `0.0.0.0` 并对外提供房间服务。
+1. 用 TailScale 把本机暴露出去：`tailscale serve --bg 5173`（仅同一 tailnet 内可访问）或 `tailscale funnel 5173`（公网可访问，需先在 TailScale 管理后台为这台机器开启 Funnel 能力），得到一个 `https://xxxxx.ts.net`。
+2. 安装时（或手动 `jican-simulator.exe --setup --server-source`）把某台机器设为**服务器源**；它会监听 `0.0.0.0` 并对外提供房间服务。安装包已内置这一步，正常安装完就是服务器源。
 3. 首页可切换**单机 / 联机**。本机是服务器源时自动使用本机；否则需要手填 **服务器源 URL**（`https://xxxxx.ts.net`）与 **256 位 Token**。
 4. 创建房间返回房间号、Token、8 位邀请码；其他人用「房间号 + Token」加入，校验通过即入房，否则服务端返回 500。
 
@@ -105,6 +110,24 @@ npm run dist:win7
 **防滥用**：同一 ID 密钥同时开多个房间视为「人机攻击」，记一次违规并标记该密钥；连续 3 次 → 该服务器源在 24 小时内对该密钥返回 500（封禁）。
 
 服务端实现：`server/net/IdKey.js`（密钥生成/校验）、`server/net/RoomManager.js`（建房/入房/违规计数/封禁）、`server/net/LobbyHttp.js`（`/api/net/info`、`/api/net/join`、`/api/local/id`）。
+
+### 设置页里的「输入与联机」（v0.3）
+
+游戏内右上角 ⚙ →「输入与联机」区块会实时读 `GET /api/net/online`：
+
+- 未开启联机 → 显示「联机未开启：本机按单机模式运行」。
+- 已开启 → 显示当前服务器地址与 Token 状态，并提供 **Serve（仅 tailnet）/ Funnel（公网）** 分段按钮；点击直接 `POST /api/net/online/mode`，真调 `tailscale serve|funnel`，失败会把原因（如「需要先在 TailScale 后台开启 Funnel」）显示在区块里，不会弹错误框。
+
+### 命令行
+
+| 命令 | 作用 |
+| --- | --- |
+| `jican-simulator.exe --setup` | 检测 TailScale，按已保存的设置开/关联机 |
+| `jican-simulator.exe --setup --server-source` | 强制把本机设为服务器源并自动暴露 |
+| `jican-simulator.exe --setup --client --no-tailscale` | 强制关闭联机（单机模式） |
+| `jican-simulator.exe --setup --server-source --expose funnel` | 用 Funnel（公网）暴露 |
+
+`--setup` 结束时会打印一行 `SETUP_RESULT={...}`（JSON），安装向导的 `[Code]` 段就读这一行判断是否已经可用。
 
 ## 存档、断线与配置
 
@@ -133,6 +156,7 @@ npm run check-llm
 | `npm run check-llm` | 本地模型连通性自检 |
 | `npm run build:all` | 生成 Windows 两个发行版的单文件 exe |
 | `npm run dist:win10` / `dist:win7` | 调用 Inno Setup 生成安装包 |
+| `python packaging/icons/make-icon.py` | 重新生成应用图标（PNG 512×512 + 多尺寸 .ico） |
 
 调试端点：`/debug/health`（tick 耗时、内存、LLM 状态）、`/debug/llm-status`、`/api/net/info`、`/api/local/id`。地址栏加 `?debug` 会在控制台暴露 `window.__jican`。
 
@@ -148,7 +172,15 @@ npm run check-llm
 | `server/net/` | HTTP/WebSocket、协议校验、**ID 密钥、房间管理、联机大厅路由** |
 | `server/persistence/` | 配置装载与热重载、原子存档、**安装设置（服务器源）** |
 | `client/` | `index.html` + 原生 ES Module：渲染、输入、状态镜像、UI 组件（含 `ItemShop`/`ItemBar`/`HackPanel`/`NetPanel`）；`assets/` 自绘 SVG |
-| `packaging/` | SEA 打包入口、资源收集脚本、Inno Setup 双脚本 |
+| `packaging/` | SEA 打包入口（`sea-entry.cjs`）、资源收集（`build.mjs`）、图标生成（`icons/make-icon.py`）、PE 资源注入（`win/IconRes.cs`）、Inno Setup 双脚本 |
 | `tests/` | `unit/` 规则与工具；`integration/` 确定性回放、存档续局、真实 WS/HTTP、LLM 降级 |
 
 更多文档：[实现说明 v0.2](docs/实现说明-v0.2.md) · [WebSocket 协议](docs/protocol/websocket-protocol.md) · [验收记录 v0.2](docs/验收记录-v0.2.md) · [实现说明 v0.1](docs/实现说明-v0.1.md)。
+
+## v0.3 变更
+
+- **安装即联机**：安装包装完自动跑 `--setup --server-source`，本机成为服务器源并通过 `tailscale serve` 暴露给 tailnet；检测不到 TailScale 时向导询问并引导下载。
+- **设置页联机区块**：显示服务器地址 / Token 状态，可一键在 Serve（仅 tailnet）与 Funnel（公网）之间切换，失败原因就地展示。
+- **发行物**：主程序改名 `jican-simulator.exe`（两个 flavor 同名），自绘图标（深蓝圆角方块 + 蓝色显示器 + 黄色感叹号）写入 exe；PE 版本信息为 `机惨模拟器 / jican-simulator.exe`。
+- **数据目录修正**：单文件 exe 的 `data/` 固定落在 exe 同级的 `data/`（不再嵌套 `data/unpacked/data/`）。
+- **修复**：单文件 exe 下 `--setup` 参数被静默忽略（`isMain` 判定在 SEA 里永不成立）；设置页点击 ⚙ 无法打开（`buildBody` 的 `this` 丢失导致 `Cannot read properties of undefined (reading 'net')`）。

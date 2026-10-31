@@ -5,6 +5,10 @@ dist/
 # 临时/测试产物
 *.log
 *.png
+# 应用图标是源码资产，必须进仓库（上面的 *.png 只用于屏蔽截图）
+!client/assets/icons/*.png
+!packaging/icons/*.png
+packaging/win/bin/
 *.log
 *.tmp
 .DS_Store

@@ -50,6 +50,16 @@ export class ModalHost {
     this.current = null;
   }
 
+  /** 只替换当前弹窗的 body（设置页改镜头/画面/曝光方式时用，避免整窗重建导致焦点与输入丢失）。 */
+  setBody(kind, body) {
+    const cur = this.current;
+    if (!cur || (kind && cur.kind !== kind)) return false;
+    const host = cur.card.querySelector('.modal-body');
+    if (!host) return false;
+    host.replaceChildren(...(body || []));
+    return true;
+  }
+
   confirm({ title, text, ok = '确定', tone = 'warn', iconName = 'warn' }) {
     return new Promise((resolve) => {
       const finish = (v) => {

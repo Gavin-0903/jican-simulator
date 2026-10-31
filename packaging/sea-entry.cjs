@@ -72,9 +72,36 @@ if (bundled) {
   console.log('[启动] isSea=' + bundled + ' 展开 ' + files + ' 个资源文件到 ' + unpacked);
   rootDir = unpacked;
 }
+// 运行期数据（config.json / settings.json / id.key / 存档）统一放 <exe目录>/data，
+// 与 unpacked/ 里的只读资源分开：升级、重装都不会丢配置，也不会污染资源缓存。
+globalThis.__JICAN_DATA_DIR__ = join(exeDir, 'data');
+mkdirSync(globalThis.__JICAN_DATA_DIR__, { recursive: true });
+console.log('[启动] 数据目录=' + globalThis.__JICAN_DATA_DIR__);
 
 const args = process.argv.slice(2);
 const setupMode = args.includes('--setup');
+
+/**
+ * 把 exe 的命令行转成 server/index.js 的 runCli 参数。
+ * SEA 里 process.argv[1] 是 exe 路径，server/index.js 自己的 isMain 判定不成立，
+ * 所以这里必须显式把命令行交给 runCli，否则 --setup / --port 之类的参数会被静默忽略。
+ */
+function cliArgs(argv) {
+  const out = { open: false, port: null, host: null, setup: false, serverSource: null, keepOpen: false, expose: null, noTailscale: false };
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (a === '--open') out.open = true;
+    else if (a === '--port') out.port = Number(argv[(i += 1)]);
+    else if (a === '--host') out.host = argv[(i += 1)];
+    else if (a === '--setup') out.setup = true;
+    else if (a === '--server-source') out.serverSource = true;
+    else if (a === '--client') out.serverSource = false;
+    else if (a === '--keep-open') out.keepOpen = true;
+    else if (a === '--expose') out.expose = argv[(i += 1)] === 'funnel' ? 'funnel' : 'serve';
+    else if (a === '--no-tailscale') out.noTailscale = true;
+  }
+  return out;
+}
 
 async function main() {
   const entry = join(rootDir, 'server', 'index.js');
@@ -84,8 +111,13 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  const { startServer, openBrowser } = await import(pathToFileURL(entry).href);
-  // --setup 交给 server/index.js 自己处理（询问是否设为服务器源），处理完即退出
+  const mod = await import(pathToFileURL(entry).href);
+  const { startServer, openBrowser, runCli } = mod;
+  if (typeof runCli === 'function') {
+    // 安装包首次运行：--setup 由 runCli 处理（TailScale 检测 + 写 config.json + 暴露端口），处理完即退出
+    await runCli(cliArgs(args));
+    return;
+  }
   const srv = await startServer({ rootDir, llm: true, logger: console });
   const manifest = bundleManifest();
   console.log('');
