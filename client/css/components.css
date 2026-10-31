@@ -201,6 +201,8 @@
   background: rgba(255, 92, 108, .14); border: 1px solid rgba(255, 92, 108, .5); color: #ffc3c9; font-size: var(--fs-sm);
 }
 .conn-banner[hidden] { display: none; }
+.conn-banner.clickable { cursor: pointer; }
+.conn-banner.clickable:hover { background: rgba(255, 92, 108, .24); }
 
 /* 教师互动小菜单 / 触屏按钮 */
 .popover {

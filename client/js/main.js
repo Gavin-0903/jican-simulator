@@ -204,6 +204,12 @@ async function boot() {
     }
     if (phase === PHASE.LOBBY) renderer.setCameraMode('follow');
     if (phase === PHASE.PLAYING && store.me?.operatingPcId && !modals.kind && pcDialog.last) pcDialog.show(pcDialog.last);
+    // 本局已结束但结算面板没显示过（刷新页面 / 新开标签 / 断线重连后重新接上 ENDED 的对局）：
+    // gameover 事件只会在收到 GAMEOVER 消息的那一刻派发一次，重连后不会重放，
+    // 而 #lobby 只在 LOBBY 阶段显示——不补这一步玩家会停在隐藏的 lobby + 静止地图上，无路可走。
+    if (phase === PHASE.ENDED && store.gameover && !modals.kind) {
+      showGameOver(store.gameover);
+    }
   };
   store.addEventListener('phase', applyPhase);
   store.addEventListener('lobby', () => store.phase === PHASE.LOBBY && lobby.render());
@@ -211,10 +217,17 @@ async function boot() {
     renderer.ensureSprites();
     if (itemShop.open) itemShop.refresh(); // 等级/次数/价格随快照刷新
   });
-  store.addEventListener('gameover', (e) => {
+  // 结算面板可能由三处触发：GAMEOVER 消息、ENDED 阶段的补放、welcome 之后的重放。
+  // 统一收敛到这里，重复调用时如果面板已经开着就不再重建（幂等，避免闪一下）。
+  const showGameOver = (payload) => {
+    const p = payload ?? store.gameover;
+    if (!p) return;
     teacherMenu.hide();
-    gameover.show(e.detail);
-  });
+    setPick(false);
+    if (modals.kind === 'gameover') return; // 已经显示了，不重复 show
+    gameover.show(p);
+  };
+  store.addEventListener('gameover', (e) => showGameOver(e.detail));
   store.addEventListener('events', (e) => {
     renderer.playEvents(e.detail);
     for (const ev of e.detail) eventToast(ev);
@@ -340,11 +353,45 @@ async function boot() {
     }
     toast.show(p.message, p.code === 'E_COOLDOWN' ? 'warn' : 'danger');
   });
+  // 连接提示条：只在「确实断开」时出现。握手阶段（已连上但还没收到 welcome）不算断开，
+  // 之前只看 connected 布尔会让「连上但会话被别人接管」这类情况误判成正常在线。
+  const setBanner = (text) => {
+    const el = $('conn-banner');
+    if (!el) return;
+    const label = el.querySelector('span');
+    if (text && label) label.textContent = text; // 只换文字，保留左侧图标
+    el.hidden = !text;
+    el.classList.toggle('clickable', Boolean(text));
+  };
   net.addEventListener('connection', (e) => {
-    $('conn-banner').hidden = e.detail.connected;
+    if (e.detail.connected) setBanner(null);
+    else setBanner('连接中断，正在重连…');
   });
-  net.addEventListener('welcome', () => {
+  net.addEventListener('welcome', (p) => {
     lobby.show(store.phase === PHASE.LOBBY);
+    if (p?.role === 'spectator') {
+      setBanner('本窗口已转为观战：游戏正在另一个窗口里进行（点此可夺回控制权）');
+    } else {
+      setBanner(null);
+    }
+    // 重连/刷新后接上的若是一局已结束的对局：initialMessages 里 PHASE 在 GAMEOVER 之前，
+    // 所以 applyPhase 那一刻 store.gameover 还是空的；等 GAMEOVER 落地后再补一次（幂等）。
+    if (store.phase === PHASE.ENDED && store.gameover) showGameOver(store.gameover);
+  });
+  // 观战/被夺权：不断线，也不动画面，只把提示条亮起来，并支持一键夺回
+  net.addEventListener('spectator', (e) => {
+    setBanner('本窗口已转为观战：游戏正在另一个窗口里进行（点此可夺回控制权）');
+    if (e.detail?.message) toast.show(e.detail.message, 'warn', 'signal');
+  });
+  $('conn-banner')?.addEventListener('click', () => {
+    // 清掉本地会话后重连 = 以「新窗口」身份接管控制权
+    try {
+      sessionStorage.removeItem('jican.session');
+    } catch {
+      /* ignore */
+    }
+    setBanner(null);
+    net.connect();
   });
 
   // ---------------------------------------------------------------- 渲染循环
