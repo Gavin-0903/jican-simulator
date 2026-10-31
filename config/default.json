@@ -1,0 +1,18 @@
+{
+  "server": { "host": "127.0.0.1", "port": 5173, "portFallbackRange": 10 },
+  "tickRate": 10,
+  "round": { "durationMs": 600000, "targetScore": 2000 },
+  "roster": { "classes": 3, "studentsPerClass": 10, "subjectTeachers": 3, "residentTeachers": 2 },
+  "mapId": "default",
+  "seed": null,
+  "net": {
+    "heartbeatTimeoutMs": 15000,
+    "maxMessageBytes": 4096,
+    "rateLimitPerSec": 60,
+    "fullSnapshotMs": 2000,
+    "deltaHistory": 50
+  },
+  "save": { "everyMs": 5000, "keepRounds": 10, "dir": "data/saves" },
+  "loop": { "maxCatchUpSteps": 5, "speeds": [0.5, 1, 2] },
+  "debug": { "endpoints": true }
+}

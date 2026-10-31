@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080">
+  <!-- 默认地图的美术资源：地面纹理与家具符号（全部原生 SVG 自绘）。
+       布局数据在 config/maps/default.json，由 SvgRenderer 按数据摆放这些符号。 -->
+  <defs>
+    <!-- ================= 地面纹理 ================= -->
+    <pattern id="pat-yard" width="48" height="48" patternUnits="userSpaceOnUse">
+      <rect width="48" height="48" fill="#141a24"/>
+      <circle cx="12" cy="12" r="1.2" fill="#1d2532"/>
+      <circle cx="36" cy="30" r="1" fill="#1b2230"/>
+      <circle cx="28" cy="6" r="0.8" fill="#1b2230"/>
+    </pattern>
+    <pattern id="pat-corridor" width="64" height="32" patternUnits="userSpaceOnUse">
+      <rect width="64" height="32" fill="#1a202c"/>
+      <path d="M0 31.5h64M32 0v32" stroke="#212938" stroke-width="1"/>
+    </pattern>
+    <pattern id="pat-classroom" width="32" height="32" patternUnits="userSpaceOnUse">
+      <rect width="32" height="32" fill="#1c2333"/>
+      <path d="M0 .5h32M.5 0v32" stroke="#232c3f" stroke-width="1"/>
+    </pattern>
+    <pattern id="pat-office" width="80" height="20" patternUnits="userSpaceOnUse">
+      <rect width="80" height="20" fill="#2a2420"/>
+      <path d="M0 19.5h80M20 0v20M60 0v10" stroke="#332c26" stroke-width="1"/>
+    </pattern>
+    <pattern id="pat-toilet" width="16" height="16" patternUnits="userSpaceOnUse">
+      <rect width="16" height="16" fill="#18272b"/>
+      <path d="M0 .5h16M.5 0v16" stroke="#203338" stroke-width="1"/>
+    </pattern>
+    <pattern id="pat-chatroom" width="24" height="24" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="24" height="24" fill="#231f33"/>
+      <path d="M0 12h24" stroke="#2a253d" stroke-width="6"/>
+    </pattern>
+
+    <radialGradient id="grad-water" cx="50%" cy="45%" r="60%">
+      <stop offset="0" stop-color="#4a8fbf"/>
+      <stop offset="1" stop-color="#22506f"/>
+    </radialGradient>
+    <linearGradient id="grad-screen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3a6ea8"/>
+      <stop offset="1" stop-color="#1e3556"/>
+    </linearGradient>
+
+    <!-- ================= 家具符号（viewBox 内绘制，按矩形拉伸） ================= -->
+    <symbol id="sym-desk" viewBox="0 0 52 24" preserveAspectRatio="none">
+      <rect x="0.5" y="0.5" width="51" height="23" rx="3" fill="#5a4636" stroke="#3b2e24"/>
+      <rect x="3" y="3" width="46" height="2" rx="1" fill="#6b5442"/>
+    </symbol>
+    <symbol id="sym-monitor" viewBox="0 0 30 14">
+      <rect x="0.5" y="0.5" width="29" height="10" rx="2" fill="#0e131c" stroke="#2c3546"/>
+      <rect x="2.5" y="2.3" width="25" height="6.4" rx="1" fill="url(#grad-screen)"/>
+      <rect x="12" y="10.5" width="6" height="3" rx="1" fill="#2c3546"/>
+    </symbol>
+    <symbol id="sym-chair" viewBox="0 0 20 20">
+      <rect x="2" y="2" width="16" height="16" rx="5" fill="#2b3446" stroke="#3a455c"/>
+      <rect x="4" y="13" width="12" height="4" rx="2" fill="#3a455c"/>
+    </symbol>
+    <symbol id="sym-partition" viewBox="0 0 6 66" preserveAspectRatio="none">
+      <rect width="6" height="66" rx="2" fill="#3c5a60"/>
+    </symbol>
+    <symbol id="sym-sink" viewBox="0 0 22 56" preserveAspectRatio="none">
+      <rect x="0.5" y="0.5" width="21" height="55" rx="4" fill="#9fb4bb" stroke="#6f8a92"/>
+      <ellipse cx="11" cy="14" rx="7" ry="6" fill="#d7e3e7"/>
+      <ellipse cx="11" cy="40" rx="7" ry="6" fill="#d7e3e7"/>
+    </symbol>
+    <symbol id="sym-cabinet" viewBox="0 0 24 110" preserveAspectRatio="none">
+      <rect x="0.5" y="0.5" width="23" height="109" rx="3" fill="#4a5568" stroke="#2f3846"/>
+      <path d="M2 37h20M2 73h20" stroke="#2f3846" stroke-width="2"/>
+      <rect x="15" y="16" width="5" height="3" rx="1.5" fill="#9aa5b8"/>
+      <rect x="15" y="52" width="5" height="3" rx="1.5" fill="#9aa5b8"/>
+      <rect x="15" y="88" width="5" height="3" rx="1.5" fill="#9aa5b8"/>
+    </symbol>
+    <symbol id="sym-plant" viewBox="0 0 28 28">
+      <circle cx="14" cy="14" r="12" fill="#2f6b45"/>
+      <circle cx="9" cy="10" r="6" fill="#3f8a59"/>
+      <circle cx="18" cy="17" r="5" fill="#3a7f52"/>
+      <circle cx="14" cy="14" r="3.5" fill="#6b4a33"/>
+    </symbol>
+    <symbol id="sym-sofa" viewBox="0 0 130 34" preserveAspectRatio="none">
+      <rect x="0.5" y="0.5" width="129" height="33" rx="9" fill="#5b4b8a" stroke="#41356a"/>
+      <rect x="8" y="7" width="55" height="20" rx="6" fill="#6c5ba3"/>
+      <rect x="67" y="7" width="55" height="20" rx="6" fill="#6c5ba3"/>
+    </symbol>
+    <symbol id="sym-table" viewBox="0 0 70 40" preserveAspectRatio="none">
+      <rect x="0.5" y="0.5" width="69" height="39" rx="10" fill="#6b5442" stroke="#4a3a2e"/>
+      <circle cx="22" cy="20" r="5" fill="#e9e2d8"/>
+      <circle cx="47" cy="18" r="4" fill="#d9a46c"/>
+    </symbol>
+    <symbol id="sym-armchair" viewBox="0 0 40 50" preserveAspectRatio="none">
+      <rect x="0.5" y="0.5" width="39" height="49" rx="10" fill="#4e417a" stroke="#3a305c"/>
+      <rect x="8" y="9" width="24" height="32" rx="7" fill="#62539a"/>
+    </symbol>
+    <symbol id="sym-shelf" viewBox="0 0 110 20" preserveAspectRatio="none">
+      <rect x="0.5" y="0.5" width="109" height="19" rx="3" fill="#5a4636" stroke="#3b2e24"/>
+      <rect x="6" y="4" width="8" height="12" fill="#c75c5c"/>
+      <rect x="16" y="4" width="6" height="12" fill="#5c8ac7"/>
+      <rect x="24" y="4" width="9" height="12" fill="#d8b24a"/>
+      <rect x="40" y="4" width="7" height="12" fill="#5cb38a"/>
+      <rect x="49" y="4" width="8" height="12" fill="#a06cc7"/>
+      <rect x="70" y="4" width="10" height="12" fill="#c78a5c"/>
+      <rect x="82" y="4" width="6" height="12" fill="#5c8ac7"/>
+    </symbol>
+    <symbol id="sym-fountain" viewBox="0 0 200 120" preserveAspectRatio="none">
+      <rect x="1" y="1" width="198" height="118" rx="26" fill="#3b4556" stroke="#566278" stroke-width="2"/>
+      <rect x="14" y="14" width="172" height="92" rx="18" fill="url(#grad-water)"/>
+      <circle cx="100" cy="60" r="16" fill="#566278"/>
+      <circle cx="100" cy="60" r="7" fill="#9ccbe8"/>
+    </symbol>
+    <symbol id="sym-tree" viewBox="0 0 40 40">
+      <circle cx="20" cy="20" r="19" fill="#244f35"/>
+      <circle cx="14" cy="15" r="10" fill="#2f6b45"/>
+      <circle cx="25" cy="24" r="9" fill="#2a603e"/>
+      <circle cx="23" cy="13" r="6" fill="#3f8a59"/>
+    </symbol>
+    <symbol id="sym-bench" viewBox="0 0 120 22" preserveAspectRatio="none">
+      <rect x="0.5" y="0.5" width="119" height="21" rx="4" fill="#5a4636" stroke="#3b2e24"/>
+      <path d="M4 7.5h112M4 14.5h112" stroke="#3b2e24" stroke-width="1.5"/>
+    </symbol>
+    <symbol id="sym-board" viewBox="0 0 120 14" preserveAspectRatio="none">
+      <rect x="0.5" y="0.5" width="119" height="13" rx="2" fill="#2c4a3a" stroke="#5a4636" stroke-width="2"/>
+      <rect x="10" y="4" width="20" height="6" fill="#e9e2d8" opacity=".8"/>
+      <rect x="40" y="3" width="16" height="8" fill="#ffcf5c" opacity=".8"/>
+      <rect x="66" y="4" width="22" height="6" fill="#e9e2d8" opacity=".8"/>
+    </symbol>
+    <symbol id="sym-pillar" viewBox="0 0 36 36">
+      <rect x="0.5" y="0.5" width="35" height="35" rx="6" fill="#3a4355" stroke="#4d5870"/>
+      <rect x="6" y="6" width="24" height="24" rx="4" fill="#465168"/>
+    </symbol>
+    <symbol id="sym-podium" viewBox="0 0 60 16" preserveAspectRatio="none">
+      <rect x="0.5" y="0.5" width="59" height="15" rx="4" fill="#3a3024" stroke="#5a4636" stroke-dasharray="3 2"/>
+    </symbol>
+  </defs>
+</svg>

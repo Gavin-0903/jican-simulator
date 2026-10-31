@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>机惨模拟器</title>
+  <link rel="icon" href="/assets/icons/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/css/theme.css">
+  <link rel="stylesheet" href="/css/layout.css">
+  <link rel="stylesheet" href="/css/components.css">
+  <script type="module" src="/js/main.js"></script>
+</head>
+<body>
+  <div id="app" class="app" data-phase="LOBBY">
+    <header id="hud" class="hud" aria-label="状态栏">
+      <div class="hud-id">
+        <div class="hud-avatar"><i class="ico" data-icon="user"></i></div>
+        <div style="min-width:0">
+          <div class="hud-name" id="hud-name">—</div>
+          <div class="hud-sub" id="hud-sub"></div>
+        </div>
+      </div>
+      <div class="hud-metric" id="hud-score" title="学生只能回到自己电脑查看积分">
+        <i class="ico" data-icon="coin"></i>
+        <div>
+          <div class="label" id="hud-score-label">积分</div>
+          <div class="value" id="hud-score-value">?</div>
+          <div class="hint" id="hud-score-hint"></div>
+        </div>
+      </div>
+      <div class="hud-metric" title="本局剩余时间">
+        <i class="ico" data-icon="clock"></i>
+        <div>
+          <div class="label">剩余</div>
+          <div class="value" id="hud-timer">10:00</div>
+        </div>
+      </div>
+      <div class="hud-actions">
+        <button class="btn sm" id="btn-speed" title="切换倍速（+ / −）"><i class="ico sm" data-icon="speed"></i><span id="speed-label">1×</span></button>
+        <button class="btn icon sm" id="btn-camera" title="切换镜头（M）"><i class="ico sm" data-icon="camera"></i></button>
+        <button class="btn icon sm" id="btn-pause" title="暂停 / 继续（Esc）"><i class="ico sm" data-icon="pause"></i></button>
+        <button class="btn icon sm" id="btn-settings" title="设置"><i class="ico sm" data-icon="settings"></i></button>
+        <button class="btn icon sm danger" id="btn-close" title="结束本局"><i class="ico sm" data-icon="close"></i></button>
+      </div>
+    </header>
+
+    <main id="stage" class="stage">
+      <svg id="map" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet" shape-rendering="geometricPrecision" role="img" aria-label="校园地图"></svg>
+      <div id="toasts" class="toasts" aria-live="polite"></div>
+      <div id="conn-banner" class="conn-banner" hidden><i class="ico sm" data-icon="signal"></i><span>连接中断，正在重连…</span></div>
+      <div id="teacher-menu" class="popover card" hidden></div>
+      <aside id="stats-panel" class="side-panel card" hidden></aside>
+      <div class="touch-pad" id="touch-pad">
+        <button class="btn primary" data-key="e" aria-label="交互">E</button>
+      </div>
+    </main>
+
+    <footer id="statusbar" class="statusbar">
+      <div class="sb-group"><span class="chip" id="sb-room"><i class="ico sm" data-icon="door"></i><span>—</span></span></div>
+      <div class="sb-group" id="sb-buffs"></div>
+      <div class="sb-group" id="sb-cds"></div>
+      <div class="sb-hint" id="sb-hint"></div>
+    </footer>
+  </div>
+
+  <section id="lobby" class="overlay lobby" aria-label="大厅"></section>
+  <div id="modal-root"></div>
+</body>
+</html>

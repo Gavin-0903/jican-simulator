@@ -1,0 +1,6 @@
+Copyright (c) 2026 jican-simulator contributors.
+All Rights Reserved.
+
+v0.x 版本暂不开源授权（后续版本计划改为 MIT）。未经许可，不得复制、修改、分发本软件或其任何部分。
+
+本项目全部图形资源为项目内自绘的原生 SVG；唯一的运行依赖 ws 使用 MIT 许可证（见 node_modules/ws/LICENSE）。

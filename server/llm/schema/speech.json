@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "required": ["speech"],
+  "properties": {
+    "speech": { "type": "string", "minLength": 1, "maxLength": 40 },
+    "moodDelta": { "type": "number", "minimum": -1, "maximum": 1 }
+  }
+}

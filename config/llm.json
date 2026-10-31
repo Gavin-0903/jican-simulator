@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "provider": "ollama",
+  "ollama": { "baseURL": "http://localhost:11434", "model": "qwen2:0.5b" },
+  "openaiCompat": { "baseURL": "http://localhost:1234", "model": "local-model", "apiKeyEnv": "JICAN_LLM_API_KEY" },
+  "timeoutMs": 2000,
+  "healthTimeoutMs": 500,
+  "recheckMs": 60000,
+  "maxConcurrency": 1,
+  "queueMax": 8,
+  "circuit": { "failThreshold": 3, "openMs": 60000 },
+  "temperature": 0.8,
+  "maxTokens": 64,
+  "rate": { "speechPerCharMs": 60000, "victimPerCharMs": 30000, "personaEveryMs": 120000, "personaBatch": 6 }
+}

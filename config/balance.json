@@ -1,0 +1,57 @@
+{
+  "move": { "baseSpeed": 120, "accel": 900, "radius": 14, "subStepPx": 6, "turnRate": 7 },
+  "nav": { "gridSize": 16 },
+  "interact": { "radius": 46 },
+  "pc": { "idleTimeoutMs": 20000, "ownMaxSessionMs": 30000, "reenterCooldownMs": 5000 },
+  "student": { "initialScore": 0, "failScore": -1000 },
+  "teacher": {
+    "initialSalary": 200,
+    "catchReward": 100,
+    "classLosePenalty": 20,
+    "visionRadius": 260,
+    "visionHalfAngleDeg": 60,
+    "catchProbabilityLerp": [1.0, 0.5],
+    "inspectRadius": 70,
+    "inspectCooldownMs": 2000
+  },
+  "vision": { "viewRadius": 380, "lowCoverDepth": 48 },
+  "jc": {
+    "cooldownMs": 20000,
+    "mismatchCooldownMs": 1000,
+    "caughtPenaltyMul": 1.0,
+    "trespassPenalty": 30,
+    "maxAmount": 100000
+  },
+  "ask": { "dwellMs": 10000, "reward": 50, "cooldownMs": 30000, "limit": 10, "rangeTolerance": 1.25 },
+  "flatter": {
+    "min": 0,
+    "max": 100,
+    "successRateMin": 0.4,
+    "successRateMax": 0.8,
+    "favorInit": 0.5,
+    "favorGain": 0.1,
+    "favorLoss": 0.05,
+    "askFavorGain": 0.05,
+    "failPenaltyMin": 5,
+    "failPenaltyMax": 40,
+    "cooldownMs": 15000
+  },
+  "toilet": { "dwellMs": 3000, "stepPct": 10, "maxStack": 5, "decayHalfLifeMs": 15000 },
+  "chatroom": { "perSecondPct": 0.01, "maxMul": 1.1 },
+  "speech": { "durationMs": 3500 },
+  "ai": {
+    "decisionMs": 500,
+    "wakeDelayMs": [0, 20000],
+    "repathMs": 200,
+    "blackboardDecayMs": 2000,
+    "bands": { "safe": 200, "danger": -400 },
+    "weights": {
+      "student": { "gain": 1.0, "cost": 0.6, "risk": 0.8, "riskDanger": 0.3, "persona": 0.3, "cooldown": 0.5 },
+      "teacher": { "gain": 1.0, "cost": 0.4, "risk": 0.5, "persona": 0.2, "cooldown": 0.5 }
+    },
+    "tauRange": [0.05, 0.18],
+    "priorScorePerMin": 40,
+    "behaviorCooldownMs": { "ask_question": 30000, "flatter": 15000, "jc_hunt": 20000, "view_score": 60000, "inspect_pc": 25000, "chase_suspect": 2000 },
+    "suspicion": { "trespassPerSec": 1.2, "lingerPerSec": 0.2, "heardJc": 0.5, "chaseThreshold": 0.6, "decay": 0.85 }
+  }
+}

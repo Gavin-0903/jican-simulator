@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "required": ["riskDelta", "socialDelta"],
+  "properties": {
+    "riskDelta": { "type": "number", "minimum": -1, "maximum": 1 },
+    "socialDelta": { "type": "number", "minimum": -1, "maximum": 1 },
+    "mood": { "type": "string", "maxLength": 12 }
+  }
+}

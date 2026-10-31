@@ -1,0 +1,22 @@
+{
+  "name": "jican-simulator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "机惨模拟器：服务端权威的单机多智能体校园模拟游戏（原生 SVG + Node.js）",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "play": "node server/index.js --open",
+    "dev": "node scripts/dev.js",
+    "test": "node --test",
+    "lint": "node scripts/lint.js",
+    "bench": "node scripts/bench.js",
+    "check-llm": "node scripts/check-llm.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

@@ -1,0 +1,67 @@
+/* 设计令牌：色板 / 圆角 / 阴影 / 字号 / 缓动（深色主题为主） */
+:root {
+  color-scheme: dark;
+  --bg-base: #12151c;
+  --bg-panel: #1b2030;
+  --bg-panel-2: #222a3d;
+  --bg-elev: #283149;
+  --line: #2e3850;
+  --line-strong: #3d4a68;
+  --text: #e8ecf5;
+  --text-2: #a9b3c9;
+  --text-3: #75809a;
+
+  --accent-player: #ffcf5c;
+  --accent-student: #5aa9ff;
+  --accent-teacher: #ff9f45;
+  --class-1: #5aa9ff;
+  --class-2: #57d1b6;
+  --class-3: #b18cff;
+  --danger: #ff5c6c;
+  --warn: #ffb547;
+  --ok: #4fd18b;
+  --info: #7cb6ff;
+
+  --radius-card: 12px;
+  --radius-btn: 8px;
+  --radius-pill: 999px;
+  --shadow-1: 0 6px 18px rgba(0, 0, 0, .35);
+  --shadow-2: 0 18px 48px rgba(0, 0, 0, .5);
+  --ease: cubic-bezier(.22, 1, .36, 1);
+  --dur: 200ms;
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  --fs-xs: 11px;
+  --fs-sm: 12.5px;
+  --fs-md: 14px;
+  --fs-lg: 17px;
+  --fs-xl: 22px;
+}
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg-base);
+  color: var(--text);
+  font: var(--fs-md)/1.5 var(--font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+button, input, select { font: inherit; color: inherit; }
+
+::selection { background: rgba(90, 169, 255, .35); }
+
+:focus-visible { outline: 2px solid var(--accent-student); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur: 0ms; }
+  *, *::before, *::after { animation-duration: 0ms !important; animation-iteration-count: 1 !important; transition-duration: 0ms !important; }
+}
