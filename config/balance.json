@@ -53,5 +53,12 @@
     "priorScorePerMin": 40,
     "behaviorCooldownMs": { "ask_question": 30000, "flatter": 15000, "jc_hunt": 20000, "view_score": 60000, "inspect_pc": 25000, "chase_suspect": 2000 },
     "suspicion": { "trespassPerSec": 1.2, "lingerPerSec": 0.2, "heardJc": 0.5, "chaseThreshold": 0.6, "decay": 0.85 }
+  },
+  "items": {
+    "freeze": { "price": 150, "maxUses": 10, "maxLevel": 10, "upLevelPrice": "{Lv} * 50", "perUsePrice": "{Lv} * 5", "freezeMsPerLevel": 1000, "repeatable": true },
+    "buyoff": { "price": 200, "maxUses": 1, "maxLevel": 10, "upLevelPrice": "{Lv} * 50", "seeThroughPctPerLevel": 10, "repeatable": true },
+    "password": { "price": 50, "maxUses": 1000000000000, "maxLevel": 5, "upLevelPrice": "{Lv} * 80", "lockMsPerLevel": 1000, "repeatable": false },
+    "hourglass": { "price": 850, "maxUses": 10, "maxLevel": 15, "upLevelPrice": "{Lv} * 240", "freezeMsPerLevel": 1000, "maxPerRoundByLevel": "ceil(Lv / 2)", "repeatable": true },
+    "hackbook": { "price": 1250, "maxUses": 5, "maxLevel": 10, "upLevelPrice": "{Lv} * 500", "failPctBase": 100, "failPctPerLevel": 10, "expelPctBase": 100, "expelPctPerLevel": 8, "maxPerRound": 1, "repeatable": true, "risk": "extreme" }
   }
 }

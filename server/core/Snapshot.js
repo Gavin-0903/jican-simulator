@@ -7,6 +7,7 @@
 import { AUDIENCE, ROLE, STATUS } from '../../shared/constants.js';
 import { dist, sightClear, round1, round2 } from '../../shared/math.js';
 import { getChar } from './GameState.js';
+import { evalCost as priceOf } from '../systems/ItemSystem.js';
 
 const r3 = (v) => Math.round(v * 1000) / 1000;
 const r4 = (v) => Math.round(v * 10000) / 10000;
@@ -63,6 +64,9 @@ export class Snapshot {
       sp: c.speech && c.speechUntil > state.tick ? c.speech : null,
       tl: round1(c.toiletLevel),
       ch: r3((c.attrMul.speed - 1) * 100),
+      // fz：剩余定格毫秒（客户端据此显示冻结遮罩与倒计时）；只下发给能看见这个角色的人也无妨，
+      // 定格是全员可见的公开效果，不需要做可见性裁剪。
+      fz: Math.max(0, Math.round(((c.frozenUntil - state.tick) * this.stepMs) / 100) * 100),
     };
   }
 
@@ -93,7 +97,30 @@ export class Snapshot {
       operatingPcId: c.operatingPcId,
       jcOpenPcId: c.jcOpenPcId,
       stats: { ...c.stats },
+      // 道具：深拷贝，避免视图与权威状态共享引用
+      items: Object.fromEntries(Object.entries(c.items).map(([id, s]) => [id, { lv: s.lv, uses: s.uses }])),
+      itemRoundCount: { ...c.itemRoundCount },
+      itemStats: { ...c.itemStats },
+      itemPrices: this.itemPrices(c),
+      frozenMs: left(c.frozenUntil),
+      // 本人在别人电脑上触发过的强密码解锁倒计时：取最长剩余，客户端表单据此锁定
+      unlockRemainMs: Math.max(0, ...Object.values(c.unlock ?? {}).map((u) => (u ? left(u.until) : 0)), 0),
     };
+  }
+
+  /** 当前等级下各道具的买入 / 升级 / 补弹价格（让客户端不必重复实现定价公式）。 */
+  itemPrices(c) {
+    const items = this.balance.items ?? {};
+    const out = {};
+    for (const [id, cfg] of Object.entries(items)) {
+      const lv = c.items?.[id]?.lv ?? 0;
+      out[id] = {
+        price: cfg.price ?? 0,
+        upLevel: lv > 0 && lv < cfg.maxLevel ? priceOf(cfg.upLevelPrice, lv) : null,
+        perUse: cfg.perUsePrice ? priceOf(cfg.perUsePrice, Math.max(1, lv)) : null,
+      };
+    }
+    return out;
   }
 
   build(state, viewerId, llm) {

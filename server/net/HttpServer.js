@@ -28,7 +28,7 @@ function safeJoin(base, rel) {
   return target === base || target.startsWith(base + sep) ? target : null;
 }
 
-export function createHttpHandler({ rootDir, controller, map, host, debug = true, logger = console }) {
+export function createHttpHandler({ rootDir, controller, map, host, debug = true, logger = console, lobbyRouter = null, idKey = null, isServerSource = false }) {
   const clientDir = resolve(rootDir, 'client');
   const sharedDir = resolve(rootDir, 'shared');
   const mapView = JSON.stringify(map.publicView());
@@ -58,6 +58,8 @@ export function createHttpHandler({ rootDir, controller, map, host, debug = true
   };
 
   return (req, res) => {
+    // 联机大厅（服务器源模式）优先接管：/api/net/* 允许跨域与 POST
+    if (lobbyRouter && lobbyRouter(req, res)) return;
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { ...SECURITY_HEADERS, allow: 'GET, HEAD' });
       return res.end();
@@ -78,6 +80,8 @@ export function createHttpHandler({ rootDir, controller, map, host, debug = true
     if (path === '/' || path === '/index.html') return sendFile(req, res, join(clientDir, 'index.html'));
     if (path === '/favicon.ico') return sendFile(req, res, join(clientDir, 'assets', 'icons', 'favicon.svg'));
     if (path === '/api/map') return sendJson(res, 200, mapView);
+    // 本机 ID 密钥（仅本机访问；联机 URL 需要它作为身份标识）
+    if (path === '/api/local/id') return idKey ? sendJson(res, 200, { ok: true, idKey, serverSource: isServerSource }) : sendJson(res, 500, { ok: false });
     if (path === '/api/lobby') return sendJson(res, 200, controller.lobbyInfo());
     if (debug && path === '/debug/llm-status') return sendJson(res, 200, controller.llmStatus());
     if (debug && path === '/debug/health') return sendJson(res, 200, controller.health());

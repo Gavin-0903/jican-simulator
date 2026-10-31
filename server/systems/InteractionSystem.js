@@ -1,7 +1,7 @@
 // 交互系统：进入/离开电脑、查看积分、JC、问老师问题、讨好老师、老师检查电脑。
 // 所有数值读 balance 配置；所有判定只在服务端执行，玩家与 AI 走同一套处理函数。
 
-import { ACTION, AUDIENCE, ERR, EVENT, JC_BLOCK, JC_BLOCK_TEXT, ROOM_TYPE, STATUS } from '../../shared/constants.js';
+import { ACTION, AUDIENCE, ERR, EVENT, ITEM_ID, JC_BLOCK, JC_BLOCK_TEXT, ROOM_TYPE, STATUS } from '../../shared/constants.js';
 import { dist, lerp, clamp } from '../../shared/math.js';
 import { getChar, getPc, isActive, isStudent, isTeacher, releasePc } from '../core/GameState.js';
 
@@ -16,6 +16,12 @@ export class InteractionSystem {
       for (const a of actions) {
         if (c.status !== STATUS.ACTIVE) {
           ctx.fail(c, a.kind, ERR.ELIMINATED, '你已退出本局', a);
+          continue;
+        }
+        // 被定格期间不能做任何交互（但不会被强制离开电脑——定格只是暂停操作，
+        // 强迫退出会把「定格 + 举报」变成一次免费抓人，成本与收益失衡）。
+        if (ctx.frozen(c)) {
+          ctx.fail(c, a.kind, ERR.FROZEN, '你被定格了', a);
           continue;
         }
         this.handle(state, ctx, c, a);
@@ -167,11 +173,44 @@ export class InteractionSystem {
     });
   }
 
+  /**
+   * 强密码（道具）：目标持有 password Lv 级时，攻击者第一次提交会先「解锁」Lv 秒，
+   * 解锁期内表单锁定、再次提交只返回剩余时间；解锁完成后本次 JC 不再受拦截。
+   * 判定放在扣分之前，且冷冻/淘汰者持有密码仍然生效（状态只读持有者的 items，不看其 status）。
+   */
+  passwordGate(state, ctx, c, a, owner) {
+    const lv = owner?.items?.password?.lv ?? 0;
+    if (lv <= 0) return false;
+    const now = state.tick;
+    const cur = c.unlock[owner.id];
+    const lockTicks = ctx.toTicks((ctx.balance.items.password.lockMsPerLevel ?? 0) * lv);
+    if (cur && cur.until > now) {
+      const remainMs = Math.max(0, ctx.ticksToMs(cur.until - now));
+      ctx.fail(c, a.kind, ERR.ITEM, '这台电脑上了强密码，正在破解中', a, { reason: 'locked', victimId: owner.id, remainMs });
+      ctx.dialog(c, { kind: 'jc_locked', victimId: owner.id, remainMs, lockMs: ctx.ticksToMs(lockTicks) });
+      return true;
+    }
+    // 上一次已经破完（ItemSystem 清理过期条目时留下的 unlockOnce 标记）：本次放行。
+    // 一次标记只放行一次，避免「破解成功 → 之后每次 JC 都免解锁」。
+    if (c.unlockOnce?.[owner.id]) {
+      delete c.unlockOnce[owner.id];
+      return false;
+    }
+    // 首次触发：开始计时
+    c.unlock[owner.id] = { until: now + lockTicks, victimId: owner.id };
+    const remainMs = ctx.ticksToMs(lockTicks);
+    ctx.fail(c, a.kind, ERR.ITEM, '这台电脑上了强密码，需要先解锁', a, { reason: 'locked', victimId: owner.id, remainMs });
+    ctx.dialog(c, { kind: 'jc_locked', victimId: owner.id, remainMs, lockMs: remainMs });
+    ctx.emit({ type: EVENT.ITEM_USED, actorId: c.id, targetId: owner.id, itemId: ITEM_ID.PASSWORD, amount: remainMs, audience: [AUDIENCE.ACTOR] });
+    return true;
+  }
+
   jcCommit(state, ctx, c, a) {
     const pcId = c.jcOpenPcId;
     const pc = getPc(state, pcId);
     if (!pc || c.operatingPcId !== pcId) return this.jcBlock(state, ctx, c, a, JC_BLOCK.NOT_AT_PC, ERR.STATE);
     if (c.cooldowns.jc > state.tick) return this.jcBlock(state, ctx, c, a, JC_BLOCK.COOLDOWN, ERR.COOLDOWN);
+    if (this.passwordGate(state, ctx, c, a, getChar(state, pc.ownerCharId))) return undefined;
     const owner = getChar(state, pc.ownerCharId);
     const username = typeof a.selfUsername === 'string' ? a.selfUsername.trim() : '';
     if (username !== c.username) {
@@ -270,6 +309,8 @@ export class InteractionSystem {
     for (const c of state.characters) {
       if (!c.asking) continue;
       const t = getChar(state, c.asking.teacherId);
+      // 定格期间提问进度暂停（不中断）：被定格不是玩家的错，不该白白丢掉已积累的停留时间。
+      if (ctx.frozen(c) || ctx.frozen(t)) continue;
       const valid =
         isActive(c) && isActive(t) && !c.operatingPcId &&
         this.inOffice(ctx, c.pos) && this.inOffice(ctx, t.pos) &&

@@ -1,7 +1,7 @@
 // 前后端共享的协议常量与枚举。浏览器通过 /shared/constants.js 直接 import。
 
 export const PROTOCOL_VERSION = 1;
-export const CLIENT_VERSION = '0.1.0';
+export const CLIENT_VERSION = '0.2.0';
 
 /** 消息类型白名单（C→S 与 S→C 共用一个命名空间）。 */
 export const MSG = Object.freeze({
@@ -17,6 +17,10 @@ export const MSG = Object.freeze({
   PAUSE: 'pause',
   PING: 'ping',
   RESYNC: 'resync',
+  ITEM_BUY: 'item.buy',
+  ITEM_UPGRADE: 'item.upgrade',
+  ITEM_USE: 'item.use',
+  ITEM_LIST: 'item.list',
   // S → C
   WELCOME: 'welcome',
   PHASE: 'phase',
@@ -55,6 +59,19 @@ export const ACTION = Object.freeze({
   VIEW_SCORE: 'viewScore',
   JC_OPEN: 'jc.open',
   INSPECT_PC: 'inspectPc',
+  // 道具（v0.2）：购买 / 升级 / 使用，均由服务端 ItemSystem 权威判定
+  BUY_ITEM: 'buyItem',
+  UPGRADE_ITEM: 'upgradeItem',
+  USE_ITEM: 'useItem',
+});
+
+/** 道具 id 白名单（与 config/balance.json 的 items 键一一对应）。 */
+export const ITEM_ID = Object.freeze({
+  FREEZE: 'freeze',
+  BUYOFF: 'buyoff',
+  PASSWORD: 'password',
+  HOURGLASS: 'hourglass',
+  HACKBOOK: 'hackbook',
 });
 
 export const EVENT = Object.freeze({
@@ -74,6 +91,13 @@ export const EVENT = Object.freeze({
   DIALOGUE: 'dialogue',
   ROUND_START: 'round_start',
   ROUND_END: 'round_end',
+  // 道具（v0.2）
+  ITEM_BOUGHT: 'item_bought',
+  ITEM_UPGRADED: 'item_upgraded',
+  ITEM_USED: 'item_used',
+  ITEM_FAILED: 'item_failed',
+  FROZEN: 'frozen',
+  HACK_RESULT: 'hack_result',
 });
 
 /** 事件可见范围：服务端按玩家视角过滤后再下发。 */
@@ -99,6 +123,8 @@ export const ERR = Object.freeze({
   STATE: 'E_STATE',
   RATE: 'E_RATE',
   SPECTATOR: 'E_SPECTATOR',
+  ITEM: 'E_ITEM',
+  FROZEN: 'E_FROZEN',
 });
 
 export const JC_BLOCK = Object.freeze({

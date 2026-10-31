@@ -9,7 +9,9 @@ export class MoveSystem {
     const dt = ctx.stepMs / 1000;
     const { accel, radius, subStepPx, turnRate } = balance.move;
     for (const c of state.characters) {
-      if (c.status !== STATUS.ACTIVE || c.operatingPcId) {
+      // 被定格 / 离线 / 坐在电脑前都不接受移动输入：清零速度并直接跳过，
+      // 不顺带清 inputDir——定格结束后玩家按住的方向键仍然有效（客户端不会重发）。
+      if (c.status !== STATUS.ACTIVE || c.operatingPcId || ctx.frozen(c)) {
         c.vel.x = 0;
         c.vel.y = 0;
         continue;

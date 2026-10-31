@@ -51,6 +51,19 @@
       <div id="conn-banner" class="conn-banner" hidden><i class="ico sm" data-icon="signal"></i><span>连接中断，正在重连…</span></div>
       <div id="teacher-menu" class="popover card" hidden></div>
       <aside id="stats-panel" class="side-panel card" hidden></aside>
+      <div class="itembar" id="itembar" hidden aria-label="道具栏"></div>
+      <div class="freeze-mask" id="freeze-mask" hidden aria-live="polite">
+        <div class="freeze-card card">
+          <i class="ico lg" data-icon="clock"></i>
+          <div class="freeze-text" id="freeze-text">被定格了！</div>
+          <div class="freeze-bar" id="freeze-bar"></div>
+          <div class="freeze-sub">定格期间无法移动与交互，稍等一下就能动了</div>
+        </div>
+      </div>
+      <div class="target-pick" id="target-pick" hidden>
+        <span class="tp-dot"></span>
+        <span class="tp-text" id="target-pick-text">选择要定格的老师：点击画面里的角色，Esc 取消</span>
+      </div>
       <div class="touch-pad" id="touch-pad">
         <button class="btn primary" data-key="e" aria-label="交互">E</button>
       </div>

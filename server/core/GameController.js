@@ -68,6 +68,8 @@ export class GameController extends EventEmitter {
         inspectRadius: this.balance.teacher.inspectRadius,
         viewRadius: this.balance.vision.viewRadius,
         teacherVision: { radius: this.balance.teacher.visionRadius, halfAngleDeg: this.balance.teacher.visionHalfAngleDeg },
+        // 道具：大厅就把完整定价/上限下发给客户端，进入游戏后无需再请求一次
+        items: this.balance.items ?? {},
       },
       resumable: resumable ? { savedAt: resumable.savedAt, ...resumable.meta, playerName: this.roster.find((r) => r.id === resumable.meta.playerCharId)?.name } : null,
       llm: this.llmStatus(),

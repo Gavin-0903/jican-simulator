@@ -18,11 +18,19 @@ import { GameOverPanel } from './ui/GameOverPanel.js';
 import { PausePanel } from './ui/PausePanel.js';
 import { SettingsPanel } from './ui/SettingsPanel.js';
 import { StatsPanel } from './ui/StatsPanel.js';
+import { ItemShop } from './ui/ItemShop.js';
+import { ItemBar } from './ui/ItemBar.js';
+import { HackPanel } from './ui/HackPanel.js';
+import { NetPanel } from './ui/NetPanel.js';
+import { ITEM_META, itemConfig, canUseSlot, hourglassLimit } from './ui/items.js';
+import { installInputGuards } from './util/ime.js';
 
 const $ = (id) => document.getElementById(id);
+// 这些弹窗都属于「正在用电脑」，暂停时不应该被暂停面板顶掉
 const PC_MODALS = new Set(['pc', 'score', 'jc']);
 
 async function boot() {
+  installInputGuards(); // 需求 1.1：全局禁复制/粘贴/剪切 + 输入框强制英文（幂等）
   hydrateIcons();
   const store = new GameStore();
   const net = new NetClient(store);
@@ -42,7 +50,8 @@ async function boot() {
   const scoreDialog = new ScoreDialog(modals, backToPc, leavePc);
   const teacherMenu = new TeacherMenu($('teacher-menu'), store, net);
   const stats = new StatsPanel($('stats-panel'), store);
-  const lobby = new Lobby($('lobby'), store, net);
+  const netPanel = new NetPanel(store);
+  const lobby = new Lobby($('lobby'), store, net, netPanel);
   const settings = new SettingsPanel(modals, store, renderer, net);
   let replayCharId = null;
   const gameover = new GameOverPanel(modals, store, {
@@ -63,16 +72,93 @@ async function boot() {
     else if (store.phase === PHASE.PAUSED) pausePanel.show(store.pausedReason);
   };
 
+  // ---------------------------------------------------------------- 道具（需求 2.1 / 2.2）
+  // 服务端下发 lobby.rules.items 之后才有道具；之前一切 UI 都优雅降级（不显示道具栏、不开商店）。
+  const hackPanel = new HackPanel(modals, store, net);
+  const itemBar = new ItemBar($('itembar'), store, net, {
+    onNeedBuy: (itemId) => {
+      toast.show(`还没有「${ITEM_META[itemId]?.name ?? itemId}」：按 B 打开道具商店`, 'info', 'coin');
+      ui.toggleItemShop();
+    },
+    onBlocked: (itemId, lv) => {
+      const cfg = itemConfig(store, itemId);
+      if (itemId === 'hourglass') return toast.show(`时间沙漏每局最多用 ${hourglassLimit(Math.max(1, lv))} 次`, 'warn', 'clock');
+      if (itemId === 'hackbook') return toast.show('黑客手册每局只能用一次', 'warn', 'book');
+      if (!canUseSlot(store.me, itemId, cfg)) return toast.show('老师正被定格，这类道具暂时不生效', 'warn', 'warn');
+      return toast.show('次数用完了：在道具商店里补充', 'warn', 'coin');
+    },
+    onPickTarget: () => {
+      modals.close(); // 选目标前先收起可能挡着画面的面板
+      startPick();
+    },
+    onHack: () => toast.show('正在拉取全员名单…', 'info', 'book', 1800),
+  });
+  const itemShop = new ItemShop(modals, store, net);
+
+  // 「选择目标」模式：InputManager 会把指针事件让出来，这里自己命中画面里的角色。
+  const pickEl = $('target-pick');
+  let pickActive = false;
+  const setPick = (on) => {
+    pickActive = on;
+    input.setFrozenPick(on);
+    if (pickEl) pickEl.hidden = !on;
+  };
+  /** 进入「选择目标」模式（次数/持有校验已在 ItemBar.useSlot 里做过）。 */
+  const startPick = () => setPick(true);
+  /** 点画面选一个可见角色（优先没被定格的，其次最近的）。 */
+  const pickTargetAt = (clientX, clientY) => {
+    const p = renderer.toWorld(clientX, clientY);
+    if (!p) return null;
+    let best = null;
+    let bestD = Infinity;
+    for (const [id, sp] of renderer.sprites) {
+      if (id === store.playerId) continue;
+      if (!sp.cache?.visible) continue;
+      const d = Math.hypot((sp.cache.x ?? 0) - p.x, (sp.cache.y ?? 0) - p.y);
+      const reach = 90; // 世界坐标：给一点点容差，方便点中
+      if (d > reach) continue;
+      if (d < bestD) {
+        bestD = d;
+        best = id;
+      }
+    }
+    return best;
+  };
+  $('map').addEventListener('pointerdown', (e) => {
+    if (!pickActive) return;
+    const id = pickTargetAt(e.clientX, e.clientY);
+    if (!id) return toast.show('没点中角色：请直接点画面里的人', 'info', 'target', 1600);
+    setPick(false);
+    itemBar.sendFreeze(id);
+  }, true);
+
   const ui = {
     teacherMenu,
     get modalOpen() {
       return !!modals.kind;
     },
     escape() {
+      if (pickActive) {
+        setPick(false);
+        return toast.show('已取消选择目标', 'info', 'target', 1400);
+      }
       if (teacherMenu.open) return teacherMenu.hide();
       if (stats.open) return stats.toggle();
       if (modals.kind) return modals.dismiss();
       if (store.phase === PHASE.PLAYING) net.send(MSG.PAUSE, { on: true });
+    },
+    /** B：开关道具商店（未下发道具配置时只提示，不报错）。 */
+    toggleItemShop() {
+      if (itemShop.open) return itemShop.close();
+      if (!itemShop.available) return toast.show('服务端还没有下发道具配置，暂时无法购买', 'warn', 'coin');
+      if (store.phase !== PHASE.PLAYING && store.phase !== PHASE.PAUSED) return toast.show('对局开始后才能使用道具', 'info', 'coin');
+      itemShop.show();
+    },
+    /** 1-5：使用道具栏对应槽位（真正的分流在 ItemBar.useSlot）。 */
+    useItemSlot(slot) {
+      if (store.phase !== PHASE.PLAYING || !store.me) return false;
+      if (modals.kind) return false;
+      return itemBar.useSlot(slot);
     },
     toggleStats: () => stats.toggle(),
     toggleCamera: () => toast.show(renderer.toggleCamera() === 'follow' ? '镜头：跟随玩家' : '镜头：校园全景', 'info', 'camera', 1600),
@@ -82,6 +168,9 @@ async function boot() {
       if (next !== store.game.speedMult) net.send(MSG.SET_SPEED, { mult: next });
     },
   };
+
+  // InputManager 需要 ui 才能把 B / 1-5 转成道具操作
+  const input = new InputManager({ svg: $('map'), store, net, renderer, ui });
 
   const hud = new HudPanel(store, renderer, {
     onSpeed: () => {
@@ -93,7 +182,6 @@ async function boot() {
     onClose: () => (store.phase === PHASE.PLAYING || store.phase === PHASE.PAUSED ? confirmQuit() : null),
     onCamera: () => ui.toggleCamera(),
   });
-  const input = new InputManager({ svg: $('map'), store, net, renderer, ui });
 
   // ---------------------------------------------------------------- 状态订阅
   const applyPhase = () => {
@@ -119,7 +207,10 @@ async function boot() {
   };
   store.addEventListener('phase', applyPhase);
   store.addEventListener('lobby', () => store.phase === PHASE.LOBBY && lobby.render());
-  store.addEventListener('snapshot', () => renderer.ensureSprites());
+  store.addEventListener('snapshot', () => {
+    renderer.ensureSprites();
+    if (itemShop.open) itemShop.refresh(); // 等级/次数/价格随快照刷新
+  });
   store.addEventListener('gameover', (e) => {
     teacherMenu.hide();
     gameover.show(e.detail);
@@ -156,8 +247,33 @@ async function boot() {
       case 'eliminated':
       case 'failed':
         return toast.show(e.text, e.actorId === me ? 'danger' : 'info', 'warn', 5000);
+      // ---- 道具相关事件（契约 v0.2：EVENT.ITEM_BOUGHT/ITEM_UPGRADED/ITEM_USED/FROZEN/HACK_RESULT）
+      case 'item_bought':
+        return e.actorId === me && toast.show(e.text || '购买成功', 'gold', 'coin');
+      case 'item_upgraded':
+        return e.actorId === me && toast.show(e.text || '升级成功', 'gold', 'bolt');
+      case 'item_used':
+        return e.actorId === me ? toast.show(e.text || '道具已生效', 'ok', 'sparkle') : null;
+      case 'frozen':
+        if (e.targetId === me) return toast.show(`你被${name(e.actorId)}定住了 ${Math.round((Number(e.amount) || 0) / 1000)} 秒！`, 'danger', 'clock', 5000);
+        if (e.actorId === me) return toast.show(`已定格${name(e.targetId)}`, 'ok', 'clock');
+        return toast.show(e.text || `${name(e.targetId)} 被定格了`, 'info', 'clock');
+      case 'hack_result':
+        return toast.show(e.text || (e.ok ? '入侵成功' : '入侵失败'), e.ok ? 'gold' : 'danger', 'book', 5000);
       default:
         return null;
+    }
+  };
+
+  /** 道具生效后的提示（各道具的字段不同，见 server/systems/ItemSystem.js）。 */
+  const itemUsedToast = (p) => {
+    const label = ITEM_META[p.itemId]?.name ?? p.itemId;
+    switch (p.itemId) {
+      case 'freeze': return toast.show(`${label}命中！${store.rosterEntry(p.targetId)?.name ?? '目标'} 被定格 ${((Number(p.ms) || 0) / 1000).toFixed(1)} 秒`, 'ok', 'clock', 4500);
+      case 'hourglass': return toast.show(`${label}：全场 ${p.affected ?? '?'} 人定格 ${((Number(p.ms) || 0) / 1000).toFixed(1)} 秒`, 'ok', 'clock', 4500);
+      case 'buyoff': return toast.show(`${label}已生效：老师目击你的概率降到 ${p.seeThroughPct ?? '?'}%`, 'ok', 'eye', 5000);
+      case 'password': return toast.show(`${label}已装备：别人 JC 你要先破解 ${String(p.lockMs ?? '').length ? Math.round(Number(p.lockMs) / 1000) : '?'} 秒`, 'ok', 'shield', 5000);
+      default: return toast.show(`${label}已生效`, 'ok', 'sparkle');
     }
   };
 
@@ -179,7 +295,31 @@ async function boot() {
           if (store.me?.operatingPcId) pcDialog.refreshOwnerScore(p.ownerScore);
         }
         return null;
+      // ---- 道具相关 dialog（服务端 ItemSystem 的实际 kind 如下；任务书里的 'item.result' 并不存在）
+      case 'hack.targets':
+        setPick(false);
+        return hackPanel.show(p);
+      case 'hack_result':
+        hackPanel.finish();
+        if (p.ok) toast.show(`入侵成功：${p.delta >= 0 ? '+' : ''}${p.delta} 分已经改好了`, 'gold', 'book', 6000);
+        else toast.show(`入侵失败：自己被倒扣 ${p.penalty ?? 0} 分`, 'danger', 'warn', 6000);
+        if (p.expelled) toast.show('被校长发现入侵监控系统，你被开除了', 'danger', 'warn', 7000);
+        return null;
+      case 'item_bought':
+        itemShop.refresh();
+        return toast.show(`购买成功：${ITEM_META[p.itemId]?.name ?? p.itemId} Lv${p.lv}${p.uses != null ? ` · 剩余 ${p.uses} 次` : ''}`, 'gold', 'coin');
+      case 'item_upgraded':
+        itemShop.refresh();
+        return toast.show(`升级成功：${ITEM_META[p.itemId]?.name ?? p.itemId} 升到 Lv${p.lv}`, 'gold', 'bolt', 4500);
+      case 'item_used':
+        itemShop.refresh();
+        return itemUsedToast(p);
+      case 'jc_locked':
+        // 强密码：JC 表单就地显示剩余解锁秒数
+        if (modals.kind === 'jc') return jcDialog.setLocked(p.remainMs);
+        return toast.show(`这台电脑上了强密码，还需 ${Math.ceil((Number(p.remainMs) || 0) / 1000)} 秒才能破解`, 'warn', 'shield');
       case 'close':
+        setPick(false);
         if (PC_MODALS.has(modals.kind)) modals.close();
         pcDialog.last = null;
         if (p.message && p.reason !== 'left') toast.show(p.message, p.reason === 'caught' ? 'danger' : 'warn');
@@ -193,6 +333,11 @@ async function boot() {
   net.addEventListener('server-error', (e) => {
     const p = e.detail;
     if (p.code === 'E_RATE' || modals.kind === 'jc') return; // JC 表单内的错误已就地显示
+    // 黑客面板正在等结果：错误就地显示，别把面板关掉
+    if (hackPanel.open && (p.code === 'E_ITEM' || p.code === 'E_FROZEN' || p.code === 'E_ELIMINATED')) {
+      hackPanel.reject(p.message);
+      return toast.show(p.message, 'danger', 'warn');
+    }
     toast.show(p.message, p.code === 'E_COOLDOWN' ? 'warn' : 'danger');
   });
   net.addEventListener('connection', (e) => {
@@ -207,6 +352,7 @@ async function boot() {
     renderer.frame(now);
     hud.update(now);
     input.tick(now);
+    itemBar.sync(); // 道具栏随快照（等级/次数/每局次数）实时刷新
     if (teacherMenu.open && renderer.interactable?.id !== teacherMenu.targetId) teacherMenu.hide();
     requestAnimationFrame(frame);
   };
@@ -214,7 +360,7 @@ async function boot() {
   lobby.show(true);
   net.connect();
   // 调试入口：地址栏加 ?debug 时在控制台暴露只读镜像，便于排查
-  if (new URLSearchParams(location.search).has('debug')) window.__jican = { store, net, renderer };
+  if (new URLSearchParams(location.search).has('debug')) window.__jican = { store, net, renderer, itemBar, itemShop, hackPanel, netPanel };
 }
 
 boot().catch((err) => {

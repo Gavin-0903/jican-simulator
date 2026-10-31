@@ -38,6 +38,11 @@ const nonneg = (v) => typeof v === 'number' && v >= 0;
 const unit = (v) => typeof v === 'number' && v >= 0 && v <= 1;
 const int = (lo, hi) => (v) => Number.isInteger(v) && v >= lo && v <= hi;
 
+const ITEM_IDS = ['freeze', 'buyoff', 'password', 'hourglass', 'hackbook'];
+const COST_KEYS = ['price', 'upLevelPrice', 'perUsePrice'];
+/** 价格表达式：非负数字，或只含数字 / Lv / 运算符的字符串（由 ItemSystem.evalCost 求值）。 */
+const costExpr = (v) => nonneg(v) || (typeof v === 'string' && v.trim() !== '' && /^[0-9A-Za-z+\-*/().\s{}]+$/.test(v) && /Lv|\d/.test(v));
+
 const APP_RULES = [
   ['server.port', int(1, 65535)],
   ['tickRate', int(1, 60)],
@@ -75,6 +80,27 @@ const BALANCE_RULES = [
   ['toilet.decayHalfLifeMs', pos],
   ['chatroom.perSecondPct', nonneg],
   ['chatroom.maxMul', (v) => typeof v === 'number' && v >= 1],
+  // 道具（v0.2）：价格用「正数」而不是整数——{Lv} 模板由 ItemSystem.evalCost 求值，配置里只保证形态合法
+  ['items.freeze.price', pos],
+  ['items.freeze.maxUses', int(1, 1e6)],
+  ['items.freeze.maxLevel', int(1, 99)],
+  ['items.freeze.freezeMsPerLevel', pos],
+  ['items.buyoff.price', pos],
+  ['items.buyoff.maxLevel', int(1, 99)],
+  ['items.buyoff.seeThroughPctPerLevel', (v) => typeof v === 'number' && v >= 0 && v <= 100],
+  ['items.password.price', pos],
+  ['items.password.maxLevel', int(1, 99)],
+  ['items.password.lockMsPerLevel', pos],
+  ['items.hourglass.price', pos],
+  ['items.hourglass.maxLevel', int(1, 99)],
+  ['items.hourglass.freezeMsPerLevel', pos],
+  ['items.hackbook.price', pos],
+  ['items.hackbook.maxLevel', int(1, 99)],
+  ['items.hackbook.failPctBase', (v) => typeof v === 'number' && v >= 0 && v <= 100],
+  ['items.hackbook.failPctPerLevel', nonneg],
+  ['items.hackbook.expelPctBase', (v) => typeof v === 'number' && v >= 0 && v <= 100],
+  ['items.hackbook.expelPctPerLevel', nonneg],
+  ['items.hackbook.maxPerRound', int(1, 99)],
 ];
 
 export function validateConfig(obj, rules, label) {
@@ -85,6 +111,17 @@ export function validateConfig(obj, rules, label) {
     if (f.successRateMin > f.successRateMax) errors.push('balance.flatter.successRateMin 不能大于 successRateMax');
     if (f.min > f.max) errors.push('balance.flatter.min 不能大于 max');
     if (f.failPenaltyMin > f.failPenaltyMax) errors.push('balance.flatter.failPenaltyMin 不能大于 failPenaltyMax');
+    // 道具：升级价的 {Lv} 模板必须是可求值的字符串/数字，否则 ItemSystem 会把价格算成 0（等于白送）
+    for (const id of ITEM_IDS) {
+      const cfg = obj.items?.[id];
+      if (!cfg) {
+        if (id === 'freeze') errors.push('balance.items 缺少道具配置');
+        continue;
+      }
+      for (const key of COST_KEYS) {
+        if (cfg[key] !== undefined && !costExpr(cfg[key])) errors.push(`balance.items.${id}.${key} 不是合法的价格表达式`);
+      }
+    }
   }
   return errors;
 }

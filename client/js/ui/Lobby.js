@@ -1,15 +1,18 @@
 // 大厅：选择身份 / 班级 / 角色，开始新局或继续存档。
+// 顶部另有「单机 / 联机」切换与联机房间面板（需求 3，见 NetPanel）。
 
 import { h, icon, store as ls, fmtClock } from '../util/dom.js';
+import { forceEnglishInput } from '../util/ime.js';
 import { MSG } from '/shared/constants.js';
 
 const CLASS_COLOR = { 1: 'var(--class-1)', 2: 'var(--class-2)', 3: 'var(--class-3)' };
 
 export class Lobby {
-  constructor(root, store, net) {
+  constructor(root, store, net, netPanel = null) {
     this.root = root;
     this.store = store;
     this.net = net;
+    this.netPanel = netPanel;
     const saved = ls.get('jican.lastChar');
     this.selected = saved || 's1-01';
     this.role = this.selected.startsWith('t') ? 'teacher' : 'student';
@@ -25,7 +28,15 @@ export class Lobby {
   render() {
     const lobby = this.store.lobby;
     if (!lobby) {
-      this.root.replaceChildren(h('div.card.lobby-card', {}, h('div.summary-text', { text: '正在连接本地服务器…' })));
+      // 还没连上服务端时，联机面板仍然可用（它不依赖 lobby 快照）
+      const netSlot = h('div.net-slot');
+      this.root.replaceChildren(h('div.card.lobby-card', {},
+        h('div.lobby-top', {},
+          h('img.brand-mark', { src: '/assets/icons/favicon.svg', alt: '' }),
+          h('div', {}, h('div.brand-title', { text: '机惨模拟器' }), h('div.brand-sub', { text: '正在连接本地服务器…' })),
+          h('div.spacer')),
+        netSlot));
+      this.netPanel?.mount(netSlot);
       return;
     }
     const roster = lobby.roster;
@@ -81,6 +92,7 @@ export class Lobby {
       : null;
 
     const seedInput = h('input.input', { placeholder: '随机种子（可选）', inputmode: 'numeric', value: this.seed, 'aria-label': '随机种子', oninput: (e) => { this.seed = e.target.value.replace(/\D/g, '').slice(0, 10); e.target.value = this.seed; } });
+    forceEnglishInput(seedInput);
     const start = h('button.btn.primary', {
       disabled: !sel || spectator,
       onclick: () => {
@@ -89,11 +101,13 @@ export class Lobby {
       },
     }, icon('play', 'sm'), sel ? `以 ${sel.name} 开始` : '选择角色');
 
+    const netSlot = h('div.net-slot');
     this.root.replaceChildren(h('div.card.lobby-card', {},
       h('div.lobby-top', {},
         h('img.brand-mark', { src: '/assets/icons/favicon.svg', alt: '' }),
         h('div', {}, h('div.brand-title', { text: '机惨模拟器' }), h('div.brand-sub', { text: `30 名学生 + 5 名老师 · 你扮演其中一人，其余由 AI 驱动 · 单局 ${Math.round(lobby.round.durationMs / 60000)} 分钟` })),
         h('div.spacer'), llmBadge),
+      netSlot,
       spectator ? h('div.note.warn', {}, icon('warn', 'sm'), '已有其他窗口在控制游戏，当前为观战模式。关闭那个窗口后刷新本页即可接管。') : null,
       resume,
       h('div.lobby-grid', {},
@@ -106,5 +120,6 @@ export class Lobby {
           rules,
           lobby.round.targetScore ? h('div.note', {}, icon('trophy', 'sm'), `学生率先达到 ${lobby.round.targetScore} 分立即获胜；否则时间到按积分排名。`) : null)),
       h('div.lobby-actions', {}, seedInput, h('div.spacer'), start)));
+    this.netPanel?.mount(netSlot);
   }
 }

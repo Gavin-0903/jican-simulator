@@ -16,6 +16,7 @@ export class HudPanel {
       scoreLabel: $('hud-score-label'), scoreValue: $('hud-score-value'), scoreHint: $('hud-score-hint'),
       timer: $('hud-timer'), speed: $('speed-label'), pause: $('btn-pause'),
       room: $('sb-room'), buffs: $('sb-buffs'), cds: $('sb-cds'), hint: $('sb-hint'),
+      freeze: $('freeze-mask'), freezeText: $('freeze-text'), freezeBar: $('freeze-bar'),
     };
     $('btn-speed').addEventListener('click', handlers.onSpeed);
     $('btn-pause').addEventListener('click', handlers.onPause);
@@ -100,10 +101,37 @@ export class HudPanel {
         }
       });
     }
+    // 被定格（需求 2.1）：全屏遮罩 + 倒计时；剩余毫秒来自快照 me.frozenMs
+    const frozenMs = Math.max(0, Number(me?.frozenMs) || 0);
+    const frozen = frozenMs > 0 && st.phase === PHASE.PLAYING;
+    if (frozenMs <= 0) this.freezeTotal = 0;
+    this.set('frozen', frozen ? Math.ceil(frozenMs / 100) : 0, (v) => {
+      const fm = this.el.freeze;
+      if (!fm) return;
+      fm.hidden = !v;
+      el.hint.classList.toggle('frozen', !!v);
+      $('app')?.classList.toggle('is-frozen', !!v);
+    });
+    if (frozen) {
+      this.set('freezeText', `被定格了！还剩 ${(frozenMs / 1000).toFixed(1)} 秒`, (v) => {
+        if (this.el.freezeText) this.el.freezeText.textContent = v;
+      });
+      // 进度条：按「冻结总时长」估算，快照里的 frozenMs 会随 tick 减少
+      const total = Math.max(1000, this.freezeTotal || frozenMs);
+      this.freezeTotal = Math.max(frozenMs, this.freezeTotal || 0);
+      const pct = Math.max(0, Math.min(100, Math.round((frozenMs / total) * 100)));
+      if (this.el.freezeBar) this.el.freezeBar.style.setProperty('--pct', `${pct}%`);
+    }
+
     this.set('hint', this.hintText(), (v) => {
       const [k, text] = v.split('\u0001');
       el.hint.replaceChildren(...(k ? [kbd(k), ' '] : []), text ?? '');
     });
+  }
+
+  /** 服务端是否下发了道具配置（没有就不提示道具快捷键）。 */
+  hasItems() {
+    return !!this.store.lobby?.rules?.items && !!this.store.me?.items;
   }
 
   hintText() {
@@ -113,12 +141,18 @@ export class HudPanel {
     if (st.phase === PHASE.ENDED) return '\u0001本局已结束';
     if (!me) return '\u0001观战模式';
     if (me.status !== 'active') return `\u0001${me.role === 'student' ? '你已被淘汰' : '你已失败'}，等待本局结束`;
+    if ((Number(me.frozenMs) || 0) > 0 && st.phase === PHASE.PLAYING) {
+      return `\u0001被定格 ${(me.frozenMs / 1000).toFixed(1)} 秒：这段时间无法移动，但别人也拿你没办法`;
+    }
     if (st.phase === PHASE.PAUSED) return 'Esc\u0001继续游戏';
     if (me.operatingPcId) return 'Esc\u0001正在使用电脑（无法移动），按 Esc 离开';
     if (me.asking) return '\u0001提问中…保持在老师身边，离开会中断';
     const t = this.renderer.interactable;
     if (t?.kind === 'teacher') return `E\u0001${t.label} · Q 提问 · F 讨好`;
     if (t) return `E\u0001${t.label}`;
-    return me.role === 'teacher' ? 'WASD\u0001移动 · 鼠标控制朝向 · 靠近有人使用的学生电脑按 E 检查' : 'WASD\u0001移动 · 去办公室找老师提问攒分，或去别人的电脑 JC';
+    const itemHint = this.hasItems() ? ' · B 道具商店 · 1-5 使用道具' : '';
+    return me.role === 'teacher'
+      ? `WASD\u0001移动 · 鼠标控制朝向 · 靠近有人使用的学生电脑按 E 检查${itemHint}`
+      : `WASD\u0001移动 · 去办公室找老师提问攒分，或去别人的电脑 JC${itemHint}`;
   }
 }

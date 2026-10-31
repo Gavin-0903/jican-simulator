@@ -72,6 +72,8 @@ test('人类老师工资 < 0 失败；AI 老师工资为负仍继续', () => {
 
 test('学生率先达到目标积分立即获胜；时间到按排名结算', () => {
   const g = makeGame({ player: 's1-01' });
+  // makeGame 默认把 targetScore 归零（方便规则用例），这里要真实结算，先恢复成本局的配置值
+  g.state.targetScore = g.config.app.round.targetScore;
   g.ch('s2-03').score = g.state.targetScore;
   g.step(1);
   assert.equal(g.state.result.reason, 'target_reached');

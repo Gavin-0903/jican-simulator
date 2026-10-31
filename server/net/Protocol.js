@@ -43,6 +43,20 @@ const SCHEMAS = {
     selfUsername: (v) => isStr(v, 32),
     amount: (v) => v === null || isNum(v),
   },
+  [MSG.ITEM_BUY]: {
+    itemId: (v) => isStr(v, 24),
+    amount: optional((v) => isInt(v, 1, 1000)),
+  },
+  [MSG.ITEM_UPGRADE]: { itemId: (v) => isStr(v, 24) },
+  [MSG.ITEM_USE]: {
+    itemId: (v) => isStr(v, 24),
+    targetId: optional((v) => isStr(v, 16)),
+    charId: optional((v) => isStr(v, 16)),
+    amount: optional((v) => isInt(v, -10000000, 10000000)),
+    action: optional((v) => v === 'add' || v === 'set'),
+    buyType: optional((v) => v === 'uses' || v === 'item'),
+  },
+  [MSG.ITEM_LIST]: {},
   [MSG.SET_SPEED]: { mult: (v) => SPEEDS.includes(v) },
   [MSG.PAUSE]: { on: (v) => typeof v === 'boolean' },
 };

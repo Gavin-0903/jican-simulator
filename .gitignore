@@ -1,5 +1,10 @@
 node_modules/
 data/
+# 打包产物（体积大，用 npm run build:all / dist:all 现场生成，不进仓库）
+dist/
+# 临时/测试产物
+*.log
+*.png
 *.log
 *.tmp
 .DS_Store

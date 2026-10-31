@@ -29,6 +29,9 @@ export function makeGame({ seed = 42, player = null, ai = false, balance = null 
   const bal = balance ? { ...config.balance, ...balance } : config.balance;
   const state = createGameState({ app: config.app, balance: bal, map, seed });
   state.phase = PHASE.PLAYING;
+  // 默认调高目标分：单元测试关注规则本身，不想因为玩家先攒到 2000 分就把对局结算掉
+  // （道具/交互类用例常需要先给玩家人为加钱或加分数次）。需要真实结算的用例自己改回来。
+  state.targetScore = 0;
   if (player) {
     getChar(state, player).control = CONTROL.HUMAN;
     state.playerCharId = player;
@@ -48,6 +51,8 @@ export function makeGame({ seed = 42, player = null, ai = false, balance = null 
   const act = (charId, kind, extra = {}) => state.inputQueue.push({ charId, type: 'action', payload: { kind, ...extra } });
   const commit = (charId, selfUsername, amount) => state.inputQueue.push({ charId, type: 'jc.commit', payload: { selfUsername, amount } });
   const move = (charId, dir, face) => state.inputQueue.push({ charId, type: 'move', payload: face === undefined ? { dir } : { dir, face } });
+  // 道具消息走的是带点的 type（与 MessageRouter 入队方式一致），payload 就是 Protocol 校验后的对象
+  const item = (charId, type, payload = {}) => state.inputQueue.push({ charId, type, payload });
   const ch = (id) => getChar(state, id);
   const pc = (id) => getPc(state, id);
   /** 把角色瞬移到某处（测试用）。 */
@@ -61,5 +66,5 @@ export function makeGame({ seed = 42, player = null, ai = false, balance = null 
   const parkTeachers = () => {
     for (const c of state.characters) if (c.role === 'teacher') place(c.id, { x: 960, y: 170 }, -Math.PI / 2);
   };
-  return { state, loop, map, config, balance: bal, out, step, act, commit, move, ch, pc, place, parkTeachers };
+  return { state, loop, map, config, balance: bal, out, step, act, commit, move, item, ch, pc, place, parkTeachers };
 }

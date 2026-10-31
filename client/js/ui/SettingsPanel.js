@@ -14,6 +14,17 @@ const KEYS = [
   ['M', '切换跟随镜头 / 全景'],
 ];
 
+/** 道具（需求 2.1）快捷键：服务端没下发道具配置时整段隐藏。 */
+const ITEM_KEYS = [
+  ['B', '打开 / 关闭道具商店（购买与升级）'],
+  ['1 – 5', '使用道具栏对应槽位的道具（Shift+1..5 或小键盘同样可用）'],
+  ['1 · 定格手枪', '进入「选择目标」模式，点击画面里的角色后定格（Esc 取消）'],
+  ['2 · 买通老师', '立即生效：老师目击你 JC 时有概率看不出'],
+  ['3 · 强密码', '立即生效：别人 JC 你的电脑前要先破解锁定时间'],
+  ['4 · 时间沙漏', '立即生效：除你之外全场定格（每局次数有限）'],
+  ['5 · 黑客手册', '打开入侵面板，改任意角色的积分 / 工资（风险极高）'],
+];
+
 export class SettingsPanel {
   constructor(modals, store, renderer, net) {
     this.modals = modals;
@@ -24,6 +35,7 @@ export class SettingsPanel {
 
   show(onClose) {
     const llm = this.store.game.llm ?? this.store.lobby?.llm;
+    const hasItems = !!this.store.lobby?.rules?.items;
     const on = llm?.mode === 'llm';
     const camSeg = h('div.segmented', {},
       ...[['follow', '跟随'], ['overview', '全景']].map(([v, label]) =>
@@ -45,6 +57,14 @@ export class SettingsPanel {
           h('dt', { text: '随机种子' }), h('dd', { text: String(this.store.game.seed ?? '—') })),
         h('div.section-title', {}, icon('keyboard', 'sm'), '快捷键'),
         h('dl.kv', {}, ...KEYS.flatMap(([k, v]) => [h('dt', {}, kbd(k)), h('dd', { text: v })])),
+        hasItems ? h('div.section-title', {}, icon('bolt', 'sm'), '道具快捷键') : null,
+        hasItems ? h('dl.kv', {}, ...ITEM_KEYS.flatMap(([k, v]) => [h('dt', {}, kbd(k)), h('dd', { text: v })])) : null,
+        hasItems ? h('div.note', {}, icon('coin', 'sm'), '道具全部由服务端裁定：价格、升级与使用效果以对局内实际扣除为准。') : null,
+        h('div.section-title', {}, icon('signal', 'sm'), '输入与联机'),
+        h('dl.kv', {},
+          h('dt', {}, kbd('Ctrl+C / V')), h('dd', { text: '已禁用：复制、粘贴、剪切、全选在游戏内一律拦截' }),
+          h('dt', {}, kbd('输入法')), h('dd', { text: '所有输入框强制英文键盘（ime-mode: disabled），直接键入即可' }),
+          h('dt', {}, kbd('联机')), h('dd', { text: '大厅顶部可切到「联机」：本机是服务器源时自动使用本机地址，否则填写服务器源 URL 与 Token' })),
       ],
       foot: [h('button.btn.primary', { onclick: () => { this.modals.close(); onClose?.(); } }, '完成')],
     });

@@ -47,10 +47,34 @@
 .sb-group { display: flex; align-items: center; gap: 6px; flex: none; }
 .sb-hint { margin-left: auto; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 auto; text-align: right; }
 
+/* 道具栏：叠在地图视口底部（HUD 之上，不占网格行高） */
+.itembar {
+  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+  display: flex; align-items: stretch; gap: 6px; z-index: 6;
+  padding: 5px; border-radius: var(--radius-card);
+  background: rgba(18, 22, 33, .82); border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow-2); backdrop-filter: blur(6px);
+  max-width: calc(100% - 20px); overflow-x: auto;
+}
+.itembar[hidden] { display: none; }
+.app[data-phase="LOBBY"] .itembar,
+.app[data-phase="ENDED"] .itembar { display: none; }
+
+/* 定格遮罩：盖住地图，只留提示与倒计时（不挡 HUD 与道具栏） */
+.freeze-mask {
+  position: absolute; inset: 0; z-index: 7;
+  display: grid; place-items: center;
+  background: radial-gradient(circle at 50% 45%, rgba(90, 169, 255, .10), rgba(8, 11, 18, .78) 70%);
+  pointer-events: none;
+}
+.freeze-mask[hidden] { display: none; }
+
 .app[data-phase="LOBBY"] .hud > :not(.hud-brand),
 .app[data-phase="LOBBY"] .statusbar > * { visibility: hidden; }
 
 @media (max-width: 720px) {
+  .itembar { bottom: 8px; gap: 4px; padding: 4px; }
+  .freeze-card { padding: 16px 18px; }
   .hud { flex-wrap: wrap; gap: 6px; }
   .hud-id { flex-basis: 100%; }
   .hud-metric { padding: 3px 8px; }

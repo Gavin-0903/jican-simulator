@@ -11,6 +11,25 @@ const MOVE_KEYS = {
   KeyD: [1, 0], ArrowRight: [1, 0],
 };
 
+/** 需求 1.1：Ctrl/Cmd + C/V/X/A 与 Ctrl+Insert / Shift+Insert 一律拦截（禁止复制粘贴）。 */
+const CLIPBOARD_CODES = new Set(['KeyC', 'KeyV', 'KeyX', 'KeyA']);
+const isClipboardCombo = (e) =>
+  ((e.ctrlKey || e.metaKey) && CLIPBOARD_CODES.has(e.code)) ||
+  ((e.ctrlKey || e.shiftKey) && e.code === 'Insert');
+
+/** 数字键 1-5（含小键盘）→ 道具槽位下标；Shift+数字按主键盘上的符号位反查。 */
+const DIGIT_CODES = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5'];
+const NUMPAD_CODES = ['Numpad1', 'Numpad2', 'Numpad3', 'Numpad4', 'Numpad5'];
+const SHIFT_SYMBOLS = ['!', '@', '#', '$', '%'];
+/** 返回 0..4 的槽位下标；不是 1-5 键则返回 -1。 */
+const itemSlotIndex = (e) => {
+  const d = DIGIT_CODES.indexOf(e.code);
+  if (d >= 0) return d;
+  const n = NUMPAD_CODES.indexOf(e.code);
+  if (n >= 0) return n;
+  return SHIFT_SYMBOLS.indexOf(e.key); // Shift+1..5 在部分键盘上 key 为 "!" 等
+};
+
 export class InputManager {
   constructor({ svg, store, net, renderer, ui }) {
     this.svg = svg;
@@ -23,6 +42,7 @@ export class InputManager {
     this.lastSent = { x: 0, y: 0, face: null };
     this.lastFaceAt = 0;
     this.faceAngle = null;
+    this.frozenPick = false; // 定格选目标模式：此时点击画面不移动，由 main.js 接管
 
     window.addEventListener('keydown', (e) => this.onKeyDown(e));
     window.addEventListener('keyup', (e) => this.onKeyUp(e));
@@ -48,6 +68,13 @@ export class InputManager {
   }
 
   onKeyDown(e) {
+    // 复制/粘贴/剪切/全选：无论焦点在哪一律吃掉（需求 1.1）
+    // 先拦一道，若事件从窗口冒泡上来被这里捕获，就不再往下走
+    if (isClipboardCombo(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (e.key === 'Escape') {
       e.preventDefault();
       this.ui.escape();
@@ -61,6 +88,22 @@ export class InputManager {
       return;
     }
     if (e.repeat) return;
+    // 道具快捷键只在能用道具时生效；否则落回字母键本身（否则 B / 1-5 会被无条件吞掉）
+    const itemsReady = () => {
+      const st = this.store;
+      const inGame = st.phase === PHASE.PLAYING || st.phase === PHASE.PAUSED;
+      return inGame && !!st.me && !!st.lobby?.rules?.items;
+    };
+    // 道具：B 打开商店，1-5（或 Shift+1..5 / 小键盘）快捷使用对应槽位
+    if (e.code === 'KeyB' && itemsReady()) {
+      e.preventDefault();
+      return this.ui.toggleItemShop?.();
+    }
+    const slot = itemSlotIndex(e);
+    if (slot >= 0 && itemsReady()) {
+      e.preventDefault();
+      return this.ui.useItemSlot?.(slot);
+    }
     const map = { KeyE: 'e', Space: 'e', KeyQ: 'q', KeyF: 'f', KeyJ: 'j', KeyV: 'v', Tab: 'tab', KeyM: 'm', Equal: '+', NumpadAdd: '+', Minus: '-', NumpadSubtract: '-' };
     const k = map[e.code];
     if (!k) return;
@@ -102,6 +145,7 @@ export class InputManager {
   }
 
   onPointerDown(e) {
+    if (this.frozenPick) return; // 选目标模式：交给 main.js 的 targetPick
     if (e.button !== 0 || !this.canMove) return;
     this.pointer = { id: e.pointerId, x: e.clientX, y: e.clientY };
     try {
@@ -113,6 +157,7 @@ export class InputManager {
   }
 
   onPointerMove(e) {
+    if (this.frozenPick) return;
     if (this.pointer && e.pointerId === this.pointer.id) {
       this.pointer.x = e.clientX;
       this.pointer.y = e.clientY;
@@ -179,6 +224,14 @@ export class InputManager {
     const payload = { dir: d };
     if (face !== null) payload.face = face;
     if (this.net.send(MSG.MOVE, payload)) this.lastSent = { ...d, face };
+  }
+
+  /** 需求 2.1：定格目标选择模式 —— 直接点画面里的角色（命中判定在 main.js 的 targetPick）。 */
+  setFrozenPick(on) {
+    this.frozenPick = !!on;
+    this.pointer = null;
+    this.svg.style.cursor = on ? 'crosshair' : '';
+    if (on) this.sync(true);
   }
 
   /** 每帧调用：鼠标按住时玩家在移动，方向需要随位置持续更新。 */

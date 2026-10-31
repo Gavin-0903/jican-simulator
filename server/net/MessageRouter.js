@@ -45,6 +45,21 @@ export class MessageRouter {
       case MSG.PAUSE:
         if (!c.pause(payload.on, 'player')) return conn.error(ERR.STATE, payload.on ? '当前无法暂停' : '当前没有暂停', seq);
         return;
+      case MSG.ITEM_BUY:
+        if (!playerId) return conn.error(ERR.NOTJOINED, '尚未加入对局', seq);
+        if (phase !== PHASE.PLAYING) return conn.error(ERR.STATE, '对局未在进行', seq);
+        if (!c.enqueue(playerId, 'item.buy', payload, seq)) conn.error(ERR.STATE, '指令队列已满，请稍后', seq);
+        return;
+      case MSG.ITEM_UPGRADE:
+        if (!playerId) return conn.error(ERR.NOTJOINED, '尚未加入对局', seq);
+        if (phase !== PHASE.PLAYING) return conn.error(ERR.STATE, '对局未在进行', seq);
+        if (!c.enqueue(playerId, 'item.upgrade', payload, seq)) conn.error(ERR.STATE, '指令队列已满，请稍后', seq);
+        return;
+      case MSG.ITEM_USE:
+        if (!playerId) return conn.error(ERR.NOTJOINED, '尚未加入对局', seq);
+        if (phase !== PHASE.PLAYING) return conn.error(ERR.STATE, '对局未在进行', seq);
+        if (!c.enqueue(playerId, 'item.use', payload, seq)) conn.error(ERR.STATE, '指令队列已满，请稍后', seq);
+        return;
       case MSG.SET_SPEED:
         if (!c.setSpeed(payload.mult)) return conn.error(ERR.BADMSG, '不支持的倍速', seq);
         return;

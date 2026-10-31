@@ -280,6 +280,184 @@
 .fx-ring.ok { stroke: var(--ok); }
 .fx-ring.info { stroke: var(--info); }
 
+/* ---------------------------------------------------------------- 输入框：禁用输入法（需求 1.1） */
+/* 所有文本输入一律英文键入：老 IE/Edge 认 ime-mode，现代浏览器靠 util/ime.js 的运行时拦截兜底。 */
+input, textarea { ime-mode: disabled; }
+input[type="text"], input[type="number"], input:not([type]), textarea {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ---------------------------------------------------------------- 道具栏（需求 2.1） */
+.itembar-slot {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 1px;
+  min-width: 56px; padding: 5px 7px 4px; border-radius: var(--radius-btn);
+  background: var(--bg-panel-2); border: 1px solid var(--line);
+  color: var(--text-2); font: inherit; font-size: 10.5px; line-height: 1.15;
+  cursor: pointer; transition: background .12s, border-color .12s, transform .12s, color .12s;
+}
+.itembar-slot:hover:not(:disabled) { background: var(--bg-elev); border-color: var(--line-strong); color: var(--text-1); }
+.itembar-slot:active:not(:disabled) { transform: translateY(1px); }
+.itembar-slot:disabled { opacity: .42; cursor: not-allowed; }
+.itembar-slot.empty { opacity: .34; }
+.itembar-slot.usable { border-color: color-mix(in srgb, var(--accent-player) 45%, var(--line)); }
+.itembar-slot .ibs-key {
+  position: absolute; top: 1px; left: 4px;
+  font-family: var(--mono); font-size: 9px; color: var(--text-3);
+}
+.itembar-slot .ibs-name { white-space: nowrap; max-width: 62px; overflow: hidden; text-overflow: ellipsis; }
+.itembar-slot .ibs-uses { font-family: var(--mono); font-weight: 700; color: var(--accent-player); }
+.itembar-slot .ibs-lv { font-size: 9px; color: var(--text-3); min-height: 11px; }
+.itembar-slot.usable .ibs-uses { color: var(--ok); }
+
+/* ---------------------------------------------------------------- 定格遮罩（需求 2.1） */
+.freeze-card {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 22px 26px; text-align: center; min-width: 250px;
+  border: 1px solid color-mix(in srgb, var(--accent-student) 40%, var(--line));
+  box-shadow: var(--shadow-2), 0 0 0 1px rgba(90, 169, 255, .12) inset;
+  animation: pop-in .18s var(--ease);
+}
+.freeze-card .ico { color: var(--accent-student); animation: breathe 1.6s ease-in-out infinite; }
+.freeze-text { font-size: var(--fs-lg); font-weight: 700; color: var(--text-1); font-variant-numeric: tabular-nums; }
+.freeze-sub { font-size: var(--fs-xs); color: var(--text-3); max-width: 260px; }
+.freeze-bar {
+  width: 100%; height: 6px; border-radius: 999px; overflow: hidden;
+  background: rgba(255, 255, 255, .08); position: relative;
+}
+.freeze-bar::after {
+  content: ''; position: absolute; inset: 0 auto 0 0; width: var(--pct, 100%);
+  background: linear-gradient(90deg, var(--accent-student), var(--accent-player));
+  border-radius: 999px; transition: width .12s linear;
+}
+.sb-hint.frozen { color: var(--accent-student); }
+
+/* ---------------------------------------------------------------- 道具商店（需求 2.1） */
+.shop { display: flex; flex-direction: column; gap: 10px; }
+.shop-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.shop-purse { font-family: var(--mono); font-weight: 700; font-size: var(--fs-lg); color: var(--accent-player); }
+.shop-note { color: var(--text-3); font-size: var(--fs-xs); }
+.shop-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.item-card {
+  display: flex; flex-direction: column; gap: 7px;
+  padding: 10px; border-radius: var(--radius-card);
+  background: var(--bg-panel-2); border: 1px solid var(--line);
+}
+.item-card.ok { border-color: rgba(76, 209, 138, .30); }
+.item-card.gold { border-color: rgba(255, 207, 92, .30); }
+.item-card.danger { border-color: rgba(255, 107, 107, .32); }
+.item-card.warn { border-color: rgba(255, 159, 69, .30); }
+.item-card.info { border-color: rgba(90, 169, 255, .28); }
+.ic-head { display: flex; align-items: center; gap: 8px; }
+.ic-icon { color: var(--accent-player); flex: none; }
+.item-card.danger .ic-icon { color: var(--danger); }
+.item-card.ok .ic-icon { color: var(--ok); }
+.item-card.warn .ic-icon { color: var(--warn); }
+.item-card.info .ic-icon { color: var(--accent-student); }
+.ic-title { display: flex; flex-direction: column; min-width: 0; }
+.ic-name { font-weight: 650; display: flex; align-items: center; gap: 5px; }
+.ic-slot {
+  font-family: var(--mono); font-size: 9.5px; color: var(--text-3);
+  border: 1px solid var(--line); border-radius: 4px; padding: 0 3px;
+}
+.ic-lv { font-size: var(--fs-xs); color: var(--text-3); }
+.ic-desc { font-size: var(--fs-xs); color: var(--text-2); line-height: 1.35; }
+.ic-effect { font-size: var(--fs-xs); color: var(--accent-player); }
+.ic-extra { font-size: 10px; color: var(--text-3); }
+.ic-extra.danger { color: var(--danger); }
+.ic-prices { display: flex; flex-wrap: wrap; gap: 8px; font-size: 10.5px; color: var(--text-3); }
+.ic-price { display: inline-flex; gap: 3px; align-items: baseline; }
+.ic-price b { font-family: var(--mono); color: var(--accent-player); font-size: var(--fs-sm); }
+.ic-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: auto; }
+
+/* ---------------------------------------------------------------- 黑客手册（需求 2.2） */
+.hack { display: flex; flex-direction: column; gap: 8px; }
+.hack-legend { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.hack-tip { color: var(--text-3); font-size: var(--fs-xs); }
+.hack-head, .hack-row {
+  display: grid; grid-template-columns: minmax(120px, 1.1fr) 96px minmax(200px, 1.5fr);
+  gap: 8px; align-items: center;
+}
+.hack-head { color: var(--text-3); font-size: var(--fs-xs); padding: 0 8px; }
+.hack-list { display: flex; flex-direction: column; gap: 4px; max-height: 44vh; overflow: auto; }
+.hack-row {
+  padding: 5px 8px; border-radius: var(--radius-btn);
+  background: var(--bg-panel-2); border: 1px solid transparent; cursor: pointer;
+}
+.hack-row:hover { border-color: var(--line); }
+.hack-row.sel { border-color: var(--danger); background: rgba(255, 107, 107, .07); }
+.hack-row.self { opacity: .85; }
+.hack-who { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.hack-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hack-score { display: flex; align-items: baseline; gap: 4px; justify-content: flex-end; font-variant-numeric: tabular-nums; }
+.hack-score b { font-family: var(--mono); }
+.hack-unit { font-size: 10px; color: var(--text-3); }
+.hack-op { display: flex; align-items: center; gap: 6px; }
+.hack-amount { width: 88px; padding: 4px 7px; font-size: var(--fs-sm); }
+.hack-status { font-size: var(--fs-xs); color: var(--text-2); }
+.hack-status[data-tone="danger"] { color: var(--danger); }
+.hack-status[data-tone="warn"] { color: var(--warn); }
+.hack-foot-note { color: var(--text-3); font-size: var(--fs-xs); }
+
+/* ---------------------------------------------------------------- JC 锁（强密码道具） */
+.jc-lock {
+  display: flex; align-items: center; gap: 7px;
+  padding: 7px 10px; border-radius: var(--radius-btn);
+  background: rgba(90, 169, 255, .10); border: 1px solid rgba(90, 169, 255, .35);
+  color: var(--accent-student); font-size: var(--fs-sm); font-variant-numeric: tabular-nums;
+}
+.jc-lock[hidden] { display: none; }
+
+/* ---------------------------------------------------------------- 联机（需求 3） */
+.net-mode-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.net-panel { display: flex; flex-direction: column; gap: 8px; }
+.net-row { display: grid; grid-template-columns: 96px 1fr; gap: 8px; align-items: center; }
+.net-row > label { color: var(--text-3); font-size: var(--fs-xs); }
+.net-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.net-err { color: var(--danger); font-size: var(--fs-sm); white-space: pre-wrap; word-break: break-all; }
+.net-ok { color: var(--ok); font-size: var(--fs-sm); }
+.net-kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: var(--fs-sm); }
+.net-kv dt { color: var(--text-3); }
+.net-kv dd { font-family: var(--mono); word-break: break-all; }
+.net-members { display: flex; flex-wrap: wrap; gap: 5px; }
+.net-link { display: flex; gap: 6px; align-items: center; }
+.net-link .input { flex: 1 1 auto; font-family: var(--mono); font-size: var(--fs-xs); }
+.net-hint { color: var(--text-3); font-size: var(--fs-xs); }
+/* 联机面板：NetPanel 用到的补充块 */
+.net-slot { min-width: 0; }
+.net-mode { flex: 0 0 auto; }
+.net-role { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--text-2); }
+.net-form, .net-join { display: flex; flex-direction: column; gap: 6px; }
+.net-join { padding-top: 6px; border-top: 1px dashed var(--line); }
+.net-row .input.net-mono { font-family: var(--mono); letter-spacing: .2px; }
+.net-kv-inline { font-family: var(--mono); font-size: var(--fs-sm); color: var(--accent-player); word-break: break-all; }
+.net-room { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: var(--radius-card); background: var(--bg-panel-2); border: 1px solid var(--line); }
+.net-kv-row { display: grid; grid-template-columns: 64px 1fr auto; gap: 8px; align-items: center; }
+.net-kv-row > span { color: var(--text-3); font-size: var(--fs-xs); }
+.net-kv-row > code { font-family: var(--mono); font-size: var(--fs-sm); color: var(--accent-player); word-break: break-all; }
+.net-link-row { display: flex; gap: 6px; align-items: center; }
+.net-link-row .input { flex: 1 1 auto; font-family: var(--mono); font-size: var(--fs-xs); }
+@media (max-width: 720px) {
+  .net-row { grid-template-columns: 1fr; gap: 4px; }
+  .net-kv-row { grid-template-columns: 56px 1fr auto; }
+}
+
+/* 「选择目标」提示条（定格手枪） */
+.target-pick {
+  position: absolute; left: 50%; top: 10px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px; z-index: 7;
+  padding: 7px 14px; border-radius: var(--radius-pill);
+  background: rgba(18, 22, 33, .92); border: 1px solid color-mix(in srgb, var(--accent-student) 45%, var(--line));
+  box-shadow: var(--shadow-2); font-size: var(--fs-sm); color: var(--text-2);
+  pointer-events: none; animation: pop-in .16s ease-out;
+}
+.target-pick[hidden] { display: none; }
+.target-pick .tp-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--accent-student);
+  box-shadow: 0 0 0 3px rgba(90, 169, 255, .22); animation: blink 1s steps(2, end) infinite;
+}
+.target-pick .tp-text { color: var(--text-1); }
+
 /* ---------------------------------------------------------------- 动画 */
 @keyframes fade-in { from { opacity: 0; } }
 @keyframes fade-out { to { opacity: 0; } }

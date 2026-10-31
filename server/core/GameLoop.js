@@ -3,8 +3,8 @@
 // step(dt):
 //   1. 消费输入队列（玩家输入与上一 tick 的 AI 意图同构，统一消费）
 //   2. AI 决策（按频率）→ 产生意图写入队列，下个 tick 消费
-//   3. MoveSystem → 4. InteractionSystem → 5. BuffSystem → 6. VisionSystem → 7. ScoreSystem → 8. WinConditionSystem
-//   （9–11 快照/广播/存档由 GameController 在每帧结束后处理）
+//   3. MoveSystem → 4. ItemSystem → 5. InteractionSystem → 6. BuffSystem → 7. VisionSystem → 8. ScoreSystem → 9. WinConditionSystem
+//   （10–12 快照/广播/存档由 GameController 在每帧结束后处理）
 // 顺序不可随意调换：Vision 依赖本帧 JC 结果，Score 依赖目击结果。
 
 import { performance } from 'node:perf_hooks';
@@ -13,6 +13,7 @@ import { clampLen } from '../../shared/math.js';
 import { Rng } from './Rng.js';
 import { getChar } from './GameState.js';
 import { MoveSystem } from '../systems/MoveSystem.js';
+import { ItemSystem } from '../systems/ItemSystem.js';
 import { InteractionSystem } from '../systems/InteractionSystem.js';
 import { BuffSystem } from '../systems/BuffSystem.js';
 import { VisionSystem } from '../systems/VisionSystem.js';
@@ -38,6 +39,9 @@ export class GameLoop {
     this.strict = strict;
     this.pipeline = [
       ['move', new MoveSystem()],
+      // 道具排在 interaction 之前：ItemSystem 先把道具指令消费掉，InteractionSystem 只处理剩余动作，
+      // 「最终判定只在一个地方」——购买/升级/使用的扣钱与随机结果都只发生在 ItemSystem 里。
+      ['items', new ItemSystem()],
       ['interaction', new InteractionSystem()],
       ['buff', new BuffSystem()],
       ['vision', new VisionSystem()],
@@ -91,6 +95,10 @@ export class GameLoop {
       fail(c, kind, code, message, action = null, extra = {}) {
         c.lastResult = { kind, ok: false, code, message, tick: s.tick, ...extra };
         if (c.control === CONTROL.HUMAN) loop.out.errors.push({ charId: c.id, code, message, kind, refSeq: action?._seq ?? null, ...extra });
+      },
+      /** 是否正被定格（所有系统共用同一判断，避免各写一遍边界条件）。 */
+      frozen(c) {
+        return s.tick < c.frozenUntil;
       },
       say(c, kind, vars) {
         loop.flavor.say(s, ctx, c, kind, vars);
@@ -155,6 +163,8 @@ export class GameLoop {
       } else if (c.pendingActions.length < MAX_PENDING_ACTIONS) {
         if (it.type === 'jc.commit') c.pendingActions.push({ kind: 'jc.commit', selfUsername: p.selfUsername, amount: p.amount, _seq: it.seq ?? null });
         else if (it.type === 'action') c.pendingActions.push({ ...p, _seq: it.seq ?? null });
+        // 道具走独立消息（item.buy/item.upgrade/item.use），kind 用消息名本身，ItemSystem 认这一组
+        else if (it.type === 'item.buy' || it.type === 'item.upgrade' || it.type === 'item.use') c.pendingActions.push({ ...p, kind: it.type, _seq: it.seq ?? null });
       }
     }
   }

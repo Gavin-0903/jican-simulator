@@ -30,7 +30,14 @@ export class VisionSystem {
       for (const { t } of teachers) {
         const seen = teacherSees(t, actor, balance, map);
         if (!seen.inside) continue;
-        const p = catchProbability(seen.d, seen.radius, near, far);
+        let p = catchProbability(seen.d, seen.radius, near, far);
+        // 买通老师（道具）：被买通的老师按等级打折，「没看见」就等于这次目击作废
+        // ——既不阻止 JC，也不扣分、不给奖励。Lv 达到 10 级时概率归零。
+        const bribe = actor.items?.buyoff?.lv ?? 0;
+        if (bribe > 0) {
+          p *= Math.max(0, 1 - bribe * (balance.items.buyoff.seeThroughPctPerLevel / 100));
+          actor.itemBuyoffSeen = (actor.itemBuyoffSeen ?? 0) + 1;
+        }
         if (ctx.rngOf(t).next() < p) {
           // 同一次 JC 最多一位老师获得目击奖励
           ctx.frame.pendingCatches.push({ teacherId: t.id, charId: actor.id, reason: 'jc', amount: jc.amount, pcId: jc.pcId, p });
