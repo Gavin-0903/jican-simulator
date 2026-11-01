@@ -146,6 +146,7 @@ npm run dist:win7
 - 每 5 秒、暂停、结算、关闭服务时自动存档到 `data/saves/`（每局一个文件，保留最近 10 局）。大厅出现「继续上局」时可以接着玩，读档后默认暂停。
 - 浏览器断线时游戏自动暂停；刷新页面或网络恢复后自动重连并继续。同一时刻只有一个窗口能控制游戏，其他窗口为观战。
 - 所有数值都在 `config/`：`default.json`（端口、帧率、回合时长、目标积分）、`balance.json`（全部平衡参数 + 道具定义）、`llm.json`（模型）、`maps/default.json`（地图）。
+- 不想手改文件的话，在**首页点 ⚙ 设置**就能编辑这三段配置的全部键（表单 + 搜索 + 逐键恢复默认），见下文 [v0.6 变更](#v06-变更首页设置--服务端配置编辑)。
 - **热调参**：修改 `config/balance.json`，或新建 `data/override.json`（例如 `{"balance": {"ask": {"reward": 80}}}`），下一帧即生效，无需重启。非法数值会被拒绝并在终端提示。
 
 ## 可选：本地 LLM
@@ -162,7 +163,7 @@ npm run check-llm
 | 命令 | 作用 |
 | --- | --- |
 | `npm run dev` | 启动服务，`server/` `shared/` `config/` 变化时自动重启 |
-| `npm test` | 单元 + 集成测试（128 项） |
+| `npm test` | 单元 + 集成测试（150 项） |
 | `npm run bench` | 35 角色满负载跑 3 局，输出单 tick 耗时与包体积 |
 | `npm run lint` | 全部 JS 语法检查 + JSON 校验 |
 | `npm run check-llm` | 本地模型连通性自检 |
@@ -213,7 +214,9 @@ npm run check-llm
 
 ## v0.5 变更：设置页 = 联机控制台
 
-双击应用窗口右上角 ⚙（或按设置键）打开**设置**，现在是一个带三个标签（**联机 / 画面 / 操作**）的联机控制台，所有数据都是打开面板那一刻向本机服务端实时问的，不是前端猜的。
+> **注意**：这一节讲的是**帧内状态栏右侧那一排小图标里**的 ⚙ 联机控制台（只有进对局后才点得到：大厅阶段整条状态栏是隐藏的，见下面的对照表）。v0.6 又在大厅卡片上加了一个同样叫「设置」的按钮（按钮上带小字 `config.json`），那个是**改 config 键值的面板**，和本节不是同一个东西——两者怎么区分，见本节后面的「[两个「设置」怎么区分](#两个设置怎么区分)」。
+
+点状态栏上的 ⚙ 打开**设置**，现在是一个带三个标签（**联机 / 画面 / 操作**）的联机控制台，所有数据都是打开面板那一刻向本机服务端实时问的，不是前端猜的。
 
 | 区块 | 能看到什么 | 能做什么 |
 | --- | --- | --- |
@@ -228,4 +231,80 @@ npm run check-llm
 - **Funnel 端口**：TailScale 的 Funnel 只允许 **443 / 8443 / 10000**。本机服务跑在 5173，对外靠 `tailscale serve` 把 `https://<节点>.ts.net:443` 反向代理到 `http://127.0.0.1:5173`；所以「对外地址」永远是 443 的 https 地址，改端口不会改变对外的 443 入口。
 - **安全**：面板里展开的 Token / 密钥只存在内存，不写日志、不进地址栏、不进 `console`；页面 CSP 仍是 `default-src 'self'`，没有为这个面板放宽任何一条。
 - 设计说明见 [docs/设计-v0.5-设置页联机控制台.md](docs/设计-v0.5-设置页联机控制台.md)。
+
+### 两个「设置」怎么区分
+
+产品里有两个按钮都叫「设置」，长得很像、点开都是三标签面板，但**管的事完全不同**：
+
+| | ⚙ 设置（v0.5） | ⚙ 设置 / `config.json`（v0.6） |
+| --- | --- | --- |
+| **位置** | 对局界面顶部状态栏右侧的那一排小图标里（`client/index.html` 的 `#btn-settings`，和倍速 / 镜头 / 暂停并排） | 大厅（首页）卡片右上角（`client/js/ui/LobbySettingsButton.js`），按钮文本是「设置」+ 一行小字 `config.json` |
+| **什么时候出现** | 进对局之后才点得到——大厅阶段整条状态栏被隐藏（`client/css/layout.css:72` 的 `.app[data-phase="LOBBY"] .hud > :not(.hud-brand)` 改成 `visibility:hidden`），所以首页看不到它 | 只有首页（`PHASE.LOBBY`）出现，进对局后由 `client/js/main.js:210` 的 `applyPhase` 隐藏 |
+| **管什么** | **这台机器怎么联机**：ID 密钥、本机联机服务器起没起、联机 Token、TailScale 三模式（Serve / Funnel / 关闭）、配置漂移修复，外加画面与操作偏好 | **服务端配置的具体键值**：`balance` / `app` / `llm` 三段（平衡 → 运行 → AI 与 LLM），改完写进 `data/override.json` 并热生效 |
+| **三标签** | 联机 / 画面 / 操作 | 平衡 / 运行 / AI 与 LLM |
+| **数据来自** | `GET /api/net/admin`（失败退回 `/api/net/online`）、`GET /api/net/admin/token`、`POST /api/net/token/regenerate`、`POST /api/net/online/mode` | `GET /api/config`、`POST /api/config`、`POST /api/config/reset` |
+| **点错了会怎样** | 不会被改坏什么，但**找不到**「改数值」的地方——它一个 config 键都改不了 | 同样不会被改坏，但**看不到** Token / TailScale——它不碰联机状态 |
+| **两者关系** | 两个独立弹窗宿主（`SettingsPanel` vs `ConfigPanel`，`modals.kind` 分别是 `settings` / `config`），**互不覆盖、互不替代**：v0.6 没有替换 v0.5，只是多了一个入口 | 同左 |
+
+一句话记法：**首页 ⚙ 改「规则」（数值怎么算），对局里 ⚙ 改「连接」（这台机器怎么对外）**。
+
+## v0.6 变更：首页设置 → 服务端配置编辑
+
+以前改玩法数值只有一个办法：编辑 `config/balance.json`，或者手写 `data/override.json` 再重开一局验证——**动手前得先知道键名叫什么、类型是什么、范围是多少**。这一版把这件事搬到大厅里：首页点 **⚙ 设置**（按钮上带一行小字 `config.json`），三段配置的键值以表单形式列出来，改完点「保存修改」就写进 `data/override.json` 并立刻生效，不用重启、不用改仓库文件、不用记 JSON 结构。
+
+| 段 | 文件 | 内容 |
+| --- | --- | --- |
+| **平衡** | `config/balance.json` | 对局数值：移动、视野、积分、工资、道具价格与等级等 |
+| **运行** | `config/default.json` | 服务器与客户端运行参数（端口、帧率、回合时长、名单、存档、联机…），改完多半要重启 |
+| **AI 与 LLM** | `config/llm.json` | 本地模型接入、超时、并发、熔断、采样参数 |
+
+- **三态对照**：每行同时给出「生效值」（默认叠上覆盖）、「默认值」（`config/*.json` 本体）与「是否被覆盖」。被覆盖的行高亮，右侧有「恢复默认」逐键撤回；底部「重置本段 / 全部重置」按段清空。
+- **搜索**：顶部搜索框按键名过滤（`move.baseSpeed` 这种点路径）。改动只进本地草稿，底部徽章显示「N 项未保存」，点「保存修改」才落盘。
+- **生效时机**：`balance` 与 `llm` 都是热生效（`balance` 下一 tick 就进 `GameState`，手改 `override.json` 也有每秒轮询兜底）；`app` 段里只有下表 11 个键必须重启，命中时面板顶部会亮一条黄条「部分配置需要重启游戏才生效：…」，其余 `app` 键照常进内存。
+- **入口位置**：大厅卡片上的 ⚙ 设置只在首页阶段出现，进对局后自动隐藏。注意**别和 v0.5 那个 ⚙ 搞混**——v0.5 的联机控制台在对局界面顶部状态栏里（大厅阶段整条状态栏隐藏，首页根本点不到），管的是 ID 密钥 / Token / TailScale，改不了任何 config 键；本节这个是改 `config/*.json` 键值的。两行对照见上面「[两个「设置」怎么区分](#两个设置怎么区分)」。
+
+**11 个需要重启才生效的键**（`server/net/ConfigAdmin.js` 的 `RESTART_KEYS`，只有 `app` 段有这张表）：
+
+| 键 | 为什么改不了 |
+| --- | --- |
+| `server.host` / `server.port` / `server.portFallbackRange` | 监听地址与端口在 `listen` 时就定了，改配置不会重新 bind |
+| `tickRate` | 决定主循环步长与所有 ms→tick 换算，中途改会让进行中的对局时间轴错乱 |
+| `mapId` / `roster.classes` / `roster.studentsPerClass` / `roster.subjectTeachers` / `roster.residentTeachers` | 地图与名单在建局时装配进 `GameState`，不重建对局改不了 |
+| `debug.endpoints` | debug 端点是在 `createHttpHandler` 时按开关挂上去的 |
+| `net.maxMessageBytes` | 绑在 `WebSocketServer` 的 `maxPayload` 上，构造后不能改 |
+
+**写入位置与结构**：设置页永远只写 `data/override.json`（`data/` 在安装版里是 `%LOCALAPPDATA%\JicanSimulator\`），**不碰 `config/*.json` 本体**，所以误操作可以逐键恢复、最坏情况删掉这个文件即可。三段各自独立，缺段等于「该段没有覆盖」：
+
+```json
+{
+  "app": {
+    "round": { "targetScore": 3000 },
+    "tickRate": 12
+  },
+  "balance": {
+    "flatter": { "min": 5 },
+    "ask": { "reward": 88 },
+    "items": { "freeze": { "price": 150, "upLevelPrice": "{Lv} * 60" } }
+  },
+  "llm": {
+    "timeoutMs": 1500
+  }
+}
+```
+
+合并规则：**只接受 base 里已存在的键**（拼错的键报「未知键」，不会凭空造配置项）、**类型必须一致**、逐层深合并（上面 `flatter.min` 只覆盖这一个数，`flatter.max` 保持默认）。写入是原子的——先写 `.tmp` 再 `rename`，避免进程被中途杀掉留下半截 JSON、导致整份覆盖被判非法而悄悄回落默认值。
+
+**接口**（均在 `server/net/LobbyHttp.js`）：
+
+| 接口 | 方法 | 说明 |
+| --- | --- | --- |
+| `/api/config` | GET / HEAD | 返回 `{ ok, secrets[], sections, defaults, override, effective, differences }`，三段齐全 |
+| `/api/config` | POST | `{ section, path, value }` 或 `{ section, patch:{点路径:值} }`；`value: null` = 删掉该键的覆盖（恢复默认） |
+| `/api/config/reset` | POST | `{ section? }`，省略即三段全清；返回 `{ ok, cleared[], clearedCount, needRestart }` |
+
+成功回 `{ ok, applied:[点路径], needRestart }`；校验失败统一 **400** + `{ ok:false, errors:[{ path, message }] }`（未知键、类型不符、交叉校验不过、价格表达式非法都走这条）；未注入配置管理员时回 **501**「本实例未启用配置读写接口」，前端据此把整块 UI 降级成「当前服务端版本不支持配置编辑」，不报错。
+
+- **安全**：三个接口都只对本机开放——`req.socket.remoteAddress` 是回环**且** Host 头解析到本机，两条都满足才行，否则 403「只允许本机设置页修改联机配置」。页面 CSP 仍是 `connect-src 'self' ws: wss:`，**没有为这个面板放宽任何一条**（接口全部同源）。下发的 `sections` / `defaults` / `override` 一律过 `maskSecrets`：键名像密钥（`apikey` / `secret` / `password` / `token`）或值是 256 位 hex 的，打码成 `sk-a********（共 17 位）`，并把这些字段的点路径列在顶层 `secrets` 里，前端据此只读、不再靠猜形状。
+- **两条踩过的坑**（都已在服务端堵死）：① 从前端把「脱敏后的显示值」原样提交回来时，那串 `sk-a********（共 17 位）` 会被当成真值写进 `override.json`——写是**成功**的，表现成模型一直连不上而配置看起来正常。现在服务端在合并前先扫一遍，命中掩码形状直接 400「这是脱敏后的显示值，不能作为配置写入；请填入真实值」；纯 `*` 串（如 `llm.maxTokens` 的真值 `**`、道具加价式 `{Lv} * 50`）故意不拦，否则用户连改都改不了。② 更早一版脱敏把**对象**也整体 `String()` 了一遍，而 `balance.items.password` 本身就是个对象（道具叫「强密码」），于是 `GET /api/config` 下发成 `"[obj********（共 15 位）"`，前端拿到的不是对象、价格与等级直接不可编辑。现在只对标量打码，对象/数组继续递归、结构原样保留。
+- 设计说明见 [docs/设计-v0.6-服务端配置编辑.md](docs/设计-v0.6-服务端配置编辑.md)。
 
