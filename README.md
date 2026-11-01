@@ -163,7 +163,7 @@ npm run check-llm
 | 命令 | 作用 |
 | --- | --- |
 | `npm run dev` | 启动服务，`server/` `shared/` `config/` 变化时自动重启 |
-| `npm test` | 单元 + 集成测试（150 项） |
+| `npm test` | 单元 + 集成测试（155 项） |
 | `npm run bench` | 35 角色满负载跑 3 局，输出单 tick 耗时与包体积 |
 | `npm run lint` | 全部 JS 语法检查 + JSON 校验 |
 | `npm run check-llm` | 本地模型连通性自检 |
@@ -232,6 +232,15 @@ npm run check-llm
 - **安全**：面板里展开的 Token / 密钥只存在内存，不写日志、不进地址栏、不进 `console`；页面 CSP 仍是 `default-src 'self'`，没有为这个面板放宽任何一条。
 - 设计说明见 [docs/设计-v0.5-设置页联机控制台.md](docs/设计-v0.5-设置页联机控制台.md)。
 
+### v0.6 顺带修复（两个 v0.5 遗留 bug）
+
+这两个问题从 v0.5 上线起就在，v0.6 做客户端面板时一并挖掉，**表现都是「某些东西就是不出现在界面上」**，不是数据算错：
+
+- **「ID 密钥」块展开后少了「来源路径 / 长度」两行。** 历史症状很误导：`.settings-block-head` 明明在 DOM 里、`querySelectorAll` 就是查不到那两行 `dt`。根因在 `client/js/util/dom.js` 的 `h()` / `s()`——旧实现无条件把第二个参数当 props 处理，写成省略 props 的 `h('dl', dt1, dd1, ...)` 时，第一个子节点被当成 props 遍历，而 HTMLElement 没有可枚举自有属性，于是**它被静默丢弃**。现在加了 `isPropsObject()`（Node / 数组 / 非对象一律不算 props），「不像 props 的第二参数」会还原成第一个子节点，全仓 12 处省略 props 的写法都被兜住；回归用例在 `tests/unit/dom.test.js`（5 个，反向验证过——把实现改回旧版这 5 个全 fail）。
+- **「配置漂移」提示条永远不显示，「一键修复」是点了没反应的死按钮。** 根因是前后端形状不一致：服务端 `/api/net/admin` 的 `drift` 是**对象** `{ state, mode, configMode, actualMode, drift: [...], port }`，前端却按数组判断，`Array.isArray(d.drift) ? d.drift : []` 恒为空；而且漂移项里本来就没有 `action` 字段，旧逻辑取不到就直接 `return`。现在两种形状都兼容，修复动作按 `code` 映射（`online-disabled-but-serve` / `online-disabled-but-funnel` 切 `off`；`online-enabled-but-off` 与 `serve-port-mismatch` 切 `tailnet`；不认识的 `code` 提示手动处理）。
+
+> 教训：**「UI 上少了一块」先怀疑渲染工具的契约，别先怀疑数据。** 这两例都是容器层静默吞掉节点或整段，日志干净、接口正常，只有对着 DOM 数节点才看得出来。
+
 ### 两个「设置」怎么区分
 
 产品里有两个按钮都叫「设置」，长得很像、点开都是三标签面板，但**管的事完全不同**：
@@ -239,7 +248,7 @@ npm run check-llm
 | | ⚙ 设置（v0.5） | ⚙ 设置 / `config.json`（v0.6） |
 | --- | --- | --- |
 | **位置** | 对局界面顶部状态栏右侧的那一排小图标里（`client/index.html` 的 `#btn-settings`，和倍速 / 镜头 / 暂停并排） | 大厅（首页）卡片右上角（`client/js/ui/LobbySettingsButton.js`），按钮文本是「设置」+ 一行小字 `config.json` |
-| **什么时候出现** | 进对局之后才点得到——大厅阶段整条状态栏被隐藏（`client/css/layout.css:72` 的 `.app[data-phase="LOBBY"] .hud > :not(.hud-brand)` 改成 `visibility:hidden`），所以首页看不到它 | 只有首页（`PHASE.LOBBY`）出现，进对局后由 `client/js/main.js:210` 的 `applyPhase` 隐藏 |
+| **什么时候出现** | **必须先开局**（`PLAYING` / `PAUSED`）才点得到。大厅阶段整条 HUD 状态栏被 `client/css/layout.css:72-73` 设成 `visibility:hidden`，齿轮就在里面——**在大厅点这个齿轮不会有任何反应**，这是设计如此，不是坏掉了 | 只有首页（`PHASE.LOBBY`）出现，进对局后由 `client/js/main.js:210` 的 `applyPhase` 隐藏 |
 | **管什么** | **这台机器怎么联机**：ID 密钥、本机联机服务器起没起、联机 Token、TailScale 三模式（Serve / Funnel / 关闭）、配置漂移修复，外加画面与操作偏好 | **服务端配置的具体键值**：`balance` / `app` / `llm` 三段（平衡 → 运行 → AI 与 LLM），改完写进 `data/override.json` 并热生效 |
 | **三标签** | 联机 / 画面 / 操作 | 平衡 / 运行 / AI 与 LLM |
 | **数据来自** | `GET /api/net/admin`（失败退回 `/api/net/online`）、`GET /api/net/admin/token`、`POST /api/net/token/regenerate`、`POST /api/net/online/mode` | `GET /api/config`、`POST /api/config`、`POST /api/config/reset` |
@@ -247,6 +256,8 @@ npm run check-llm
 | **两者关系** | 两个独立弹窗宿主（`SettingsPanel` vs `ConfigPanel`，`modals.kind` 分别是 `settings` / `config`），**互不覆盖、互不替代**：v0.6 没有替换 v0.5，只是多了一个入口 | 同左 |
 
 一句话记法：**首页 ⚙ 改「规则」（数值怎么算），对局里 ⚙ 改「连接」（这台机器怎么对外）**。
+
+**⚠ 大厅里点齿轮没反应，这是设计如此，不是 bug。** 那个齿轮属于对局 HUD 状态栏，大厅阶段整条状态栏是 `visibility:hidden`（`client/css/layout.css:72-73`），元素还在、只是看不见也点不到——所以「在大厅点齿轮打不开任何设置页」是预期行为。**大厅里唯一的设置入口就是卡片标题行右端那个「设置 / config.json」按钮**（实测：距卡片右边 21px、顶 31px，即 relX≈80% / relY≈5%，是标题行 `brand-mark` → 标题块 → `.spacer` → `.lobby-settings-slot` 的最后一项）。想打开 v0.5 那个联机控制台，**必须先开一局**（`PLAYING` 或 `PAUSED`）再点状态栏齿轮。
 
 ## v0.6 变更：首页设置 → 服务端配置编辑
 
