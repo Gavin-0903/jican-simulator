@@ -67,10 +67,21 @@ export class InputManager {
     return t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
   }
 
+  /**
+   * 是否处于「游戏内」：只有对局中（PLAYING / PAUSED）才拦剪贴板快捷键。
+   * 大厅要复用 Ctrl+V 粘贴房间号 / 服务器地址，设置页要复制 ID 密钥与 Token，
+   * 结算页要复制成绩——这些阶段无条件放行（与 util/ime.js 的 setTypingGuard 同口径）。
+   */
+  get guardTyping() {
+    const p = this.store?.phase;
+    return p === PHASE.PLAYING || p === PHASE.PAUSED;
+  }
+
   onKeyDown(e) {
-    // 复制/粘贴/剪切/全选：无论焦点在哪一律吃掉（需求 1.1）
+    // 复制/粘贴/剪切/全选：对局中无论焦点在哪一律吃掉（需求 1.1）；
+    // 未进对局（大厅 / 设置 / 结算）放行，否则连粘贴房间号都做不到。
     // 先拦一道，若事件从窗口冒泡上来被这里捕获，就不再往下走
-    if (isClipboardCombo(e)) {
+    if (this.guardTyping && isClipboardCombo(e)) {
       e.preventDefault();
       e.stopPropagation();
       return;
@@ -104,6 +115,9 @@ export class InputManager {
       e.preventDefault();
       return this.ui.useItemSlot?.(slot);
     }
+    // 其余热键（E/Space/Q/F/J/V/Tab/M/+/-）只在对局中生效：
+    // 大厅和结算页没有任何「对局内热键」可用，继续 preventDefault 只会把 Ctrl+V 这类焦点在 body 上的组合键吃掉。
+    if (!this.guardTyping) return;
     const map = { KeyE: 'e', Space: 'e', KeyQ: 'q', KeyF: 'f', KeyJ: 'j', KeyV: 'v', Tab: 'tab', KeyM: 'm', Equal: '+', NumpadAdd: '+', Minus: '-', NumpadSubtract: '-' };
     const k = map[e.code];
     if (!k) return;

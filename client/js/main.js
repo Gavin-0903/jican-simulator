@@ -23,14 +23,16 @@ import { ItemBar } from './ui/ItemBar.js';
 import { HackPanel } from './ui/HackPanel.js';
 import { NetPanel } from './ui/NetPanel.js';
 import { ITEM_META, itemConfig, canUseSlot, hourglassLimit } from './ui/items.js';
-import { installInputGuards } from './util/ime.js';
+import { installInputGuards, setTypingGuard } from './util/ime.js';
+import { shouldGuardTyping } from './util/typing-guard.js';
 
 const $ = (id) => document.getElementById(id);
 // 这些弹窗都属于「正在用电脑」，暂停时不应该被暂停面板顶掉
 const PC_MODALS = new Set(['pc', 'score', 'jc']);
 
 async function boot() {
-  installInputGuards(); // 需求 1.1：全局禁复制/粘贴/剪切 + 输入框强制英文（幂等）
+  // 需求 1.1：进对局后才禁复制/粘贴/剪切 + 强制英文键盘；大厅与结算页放行（见 applyPhase 里的 setTypingGuard）
+  installInputGuards();
   hydrateIcons();
   const store = new GameStore();
   const net = new NetClient(store);
@@ -187,6 +189,9 @@ async function boot() {
   const applyPhase = () => {
     const phase = store.phase;
     $('app').dataset.phase = phase;
+    // 需求 1.1：只有对局中（PLAYING / PAUSED）才拦复制粘贴、强制英文键盘；
+    // 大厅要填房间号/服务器地址、设置页要复制 ID 密钥与 Token、结算页要复制成绩——这些阶段一律放行。
+    setTypingGuard(shouldGuardTyping(phase));
     lobby.show(phase === PHASE.LOBBY);
     if (phase === PHASE.LOBBY && replayCharId && store.role === 'controller') {
       const id = replayCharId;

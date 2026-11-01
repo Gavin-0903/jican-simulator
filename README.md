@@ -90,13 +90,23 @@ npm run dist:win7
 - 消息 `item.buy` / `item.upgrade` / `item.use` / `item.list`，事件 `item_bought` / `item_upgraded` / `item_used` / `item_failed` / `frozen` / `hack_result`。协议见 [WebSocket 协议](docs/protocol/websocket-protocol.md)。
 - 冻结状态由 `MoveSystem` 跳过移动实现，客户端只负责画冻结遮罩与倒计时。
 
-## 输入控制（v0.2）
+## 输入控制（v0.2 / v0.6 调整）
 
-按需求做了三层加固，命中时**静默吞掉**而不是弹窗打扰：
+按需求做了三层加固，命中时**静默吞掉**而不是弹窗打扰。**只在进入对局后才生效**（对局中包括暂停）：
 
-1. 捕获阶段的 `copy` / `cut` / `paste` 事件拦截（`client/js/util/ime.js` 的 `installInputGuards()`）。
-2. `Ctrl/Cmd + A/C/V/X`、`Ctrl+Insert`、`Shift+Insert` 在 `InputManager` 里最先 `preventDefault()`。
-3. 输入法强制英文：`ime-mode: disabled` + `forceEnglishInput()` 对所有 `input`/`textarea`/`contentEditable` 生效 + `MutationObserver` 跟踪新插入的输入框 + `compositionstart` 打断中文候选。
+1. 捕获阶段的 `copy` / `cut` / `paste` 事件拦截（`client/js/util/ime.js` 的 `installInputGuards()` + `setTypingGuard()`）。
+2. `Ctrl/Cmd + A/C/V/X`、`Ctrl+Insert`、`Shift+Insert` 在 `InputManager` 里最先 `preventDefault()`（`get guardTyping` 只在 `PLAYING` / `PAUSED` 时为真）。
+3. 输入法强制英文：`html[data-typing-guard="on"] input, textarea { ime-mode: disabled }` + `forceEnglishInput()` 对所有 `input`/`textarea`/`contentEditable` 生效 + `MutationObserver` 跟踪新插入的输入框 + `compositionstart` 打断中文候选。
+
+**开关口径**（`client/js/util/typing-guard.js` 的 `shouldGuardTyping(phase)`，由 `client/js/main.js` 的 `applyPhase` 在每次阶段变化时调用 `setTypingGuard()`）：
+
+| 阶段 | 复制 / 粘贴 / 剪切 / 全选 | 中文输入法 |
+|---|---|---|
+| 大厅 `LOBBY` | 可用 | 可用（要填房间号、服务器地址、换房间贴邀请链接） |
+| 对局中 `PLAYING` / `PAUSED` | **禁用** | **强制英文** |
+| 结算 `ENDED` | 可用 | 可用（要复制成绩） |
+
+设置页等弹窗里的「复制」按钮一直可用（走 `navigator.clipboard`，不受键盘拦截影响）。
 
 ## 联机（TailScale Serve / Funnel）
 
@@ -207,7 +217,7 @@ npm run check-llm
 
 | 区块 | 能看到什么 | 能做什么 |
 | --- | --- | --- |
-| **ID 密钥** | 掩码 `5361d110…`、`<数据目录>\id.key`、长度 256 字符（256 位十六进制） | 「显示完整」展开全文、「复制」（走按钮，游戏内已禁用 Ctrl+C） |
+| **ID 密钥** | 掩码 `5361d110…`、`<数据目录>\id.key`、长度 256 字符（256 位十六进制） | 「显示完整」展开全文、「复制」（走按钮；对局中 Ctrl+C 被拦，但未进对局时也能直接选中复制） |
 | **本机联机服务器** | 运行状态灯（已启动 / 未启动）、本页地址、监听地址、对外地址（`https://<节点>.<tailnet>.ts.net`）、数据目录、房间数（可展开列表）、监听端口 | 「开启联机」「重启服务器」，端口在 5173（默认）/ 当前端口 之间切 |
 | **联机 Token** | 掩码 `928890e1…4d4f`、长度 | 「显示完整」（**二次确认**后才向服务端取一次全文）、「生成 / 重新生成」（旧 Token 立刻失效，已加入的房间要重新要口令）、「复制」 |
 | **TailScale** | 版本、桌面服务、登录状态（BackendState）、节点名、MagicDNS 地址、Funnel 允许端口 | 三选一：**Serve（tailnet 内）/ Funnel（公网）/ 关闭**；切换中按钮禁用并显示「切换中…」，失败原样展示服务端原因 |

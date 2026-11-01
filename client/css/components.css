@@ -287,8 +287,11 @@
 .fx-ring.info { stroke: var(--info); }
 
 /* ---------------------------------------------------------------- 输入框：禁用输入法（需求 1.1） */
-/* 所有文本输入一律英文键入：老 IE/Edge 认 ime-mode，现代浏览器靠 util/ime.js 的运行时拦截兜底。 */
-input, textarea { ime-mode: disabled; }
+/* 只在对局中禁用输入法：main.js 会按阶段写 <html data-typing-guard="on|off">，
+   大厅 / 设置页 / 结算页是 off——那里要能正常用中文输入法和复制粘贴。
+   老 IE/Edge 认 ime-mode，现代浏览器靠 util/ime.js 的运行时拦截兜底。 */
+html[data-typing-guard="on"] input,
+html[data-typing-guard="on"] textarea { ime-mode: disabled; }
 input[type="text"], input[type="number"], input:not([type]), textarea {
   text-transform: none;
   letter-spacing: 0;

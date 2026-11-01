@@ -641,8 +641,8 @@ export class SettingsPanel {
       hasItems ? h('div.note', {}, icon('coin', 'sm'), '道具全部由服务端裁定：价格、升级与使用效果以对局内实际扣除为准。') : null,
       h('div.section-title', {}, icon('signal', 'sm'), '输入控制'),
       h('dl.kv',
-        h('dt', {}, kbd('Ctrl+C / V')), h('dd', { text: '已禁用：复制、粘贴、剪切、全选在游戏内一律拦截（设置页的「复制」按钮不受影响）' }),
-        h('dt', {}, kbd('输入法')), h('dd', { text: '所有输入框强制英文键盘（ime-mode: disabled），直接键入即可' }),
+        h('dt', {}, kbd('Ctrl+C / V')), h('dd', { text: '仅对局中禁用：进入对局后复制、粘贴、剪切、全选一律拦截；大厅、设置页与结算页正常可用（「复制」按钮不受影响）' }),
+        h('dt', {}, kbd('输入法')), h('dd', { text: '仅对局中强制英文键盘（ime-mode: disabled）；未进对局时可正常切中文输入法' }),
         h('dt', {}, kbd('联机')), h('dd', { text: '大厅顶部可切到「联机」：本机是服务器源时自动使用本机地址，否则填写服务器源 URL 与 Token' })),
     ];
   }
