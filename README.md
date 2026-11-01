@@ -18,16 +18,17 @@
 
 | 安装包 | 目标平台 | 说明 |
 | --- | --- | --- |
-| `机惨模拟器-Win10满血-v0.3.0-setup-1031.exe` | Windows 10 / 11 x64 | 单文件自带运行时（Node SEA），**满血版**：内嵌 `ws`，无需安装 Node.js |
-| `机惨模拟器-Win7兼容-v0.3.0-setup-1031.exe` | Windows 7 SP1 x86 / x64 | **兼容版**：安装目录同样自带 exe，Node 20+ 二进制不支持 Win7，因此运行期退回系统 Node.js（需先装 Node 18） |
+| `机惨模拟器-Win10满血-v0.2beta-setup-1031.exe` | Windows 10 / 11 x64 | 单文件自带运行时（Node SEA），**满血版**：内嵌 `ws`，无需安装 Node.js |
+| `机惨模拟器-Win7兼容-v0.1dev-setup-1031.exe` | Windows 7 SP1 x86 / x64 | **兼容版**：安装目录同样自带 exe，Node 20+ 二进制不支持 Win7，因此运行期退回系统 Node.js（需先装 Node 18） |
 
 - 两个安装包都声明 `PrivilegesRequired=admin`，**非管理员运行时会自动弹出 UAC 提权**（内部提权）。
 - 主程序统一叫 **`jican-simulator.exe`**（两个 flavor 同名），图标与版本信息由 `packaging/win/IconRes.cs` 在打包后写入 PE 资源段（`RT_GROUP_ICON` + `RT_VERSION`）。
-- **双击请用 `jican-simulator-launcher.exe`**（开始菜单与桌面快捷方式都指向它）：它是 GUI 子系统的外壳，启动时不会弹黑框；它拉起 `jican-simulator.exe --serve` 后自己退出。直接双击 `jican-simulator.exe` 仍然可用，但会带一个黑窗口，关掉黑窗口服务就停。
+- **双击请用 `jican-simulator-launcher.exe`**（开始菜单与桌面快捷方式都指向它）：它是 GUI 子系统（`/target:winexe`）的**常驻宿主**，不弹黑框，会自己弹出**内嵌 WebView2 的应用窗口**并常驻**系统托盘**（见 v0.4 变更）。直接双击 `jican-simulator.exe` 仍然可用，但会带一个黑窗口，关掉黑窗口服务就停。
 - **安装即开联机（v0.3）**：安装向导先检查 `%ProgramFiles%\Tailscale\tailscale.exe`；
   - 已安装 → 装完自动以 `jican-simulator.exe --setup --server-source` 跑一次，检测 TailScale、生成 256 位 Token、写 `data/config.json`，并用 `tailscale serve --bg 5173` 暴露给同一 tailnet。
   - 未安装 → 弹窗询问是否去下载；同意则打开 https://tailscale.com/download/windows，装完双击开始菜单里的「**机惨模拟器（一键联机配置）**」即可补做。
-- 静默安装：`"机惨模拟器-Win10满血-v0.3.0-setup-1031.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`。
+- 静默安装：`"机惨模拟器-Win10满血-v0.2beta-setup-1031.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`。
+- **没装浏览器也能玩（v0.4）**：应用窗口内嵌 Edge WebView2，Windows 11 与绝大多数 Windows 10 已预装；没有运行时的机器上宿主会引导安装，仍失败则退回系统默认浏览器，服务照常跑。
 
 打包命令：
 
@@ -186,3 +187,16 @@ npm run check-llm
 - **数据目录迁移到用户目录**：安装到 `C:\Program Files` 后安装目录对普通用户只读（`BUILTIN\Users:(RX)`），旧的 `<exe目录>/data` 一落盘就 `EPERM`。现在资源（`server/client/config`）仍是安装时静态展开的 `<exe目录>/data/unpacked`（只读），**运行期可写数据统一在 `%LOCALAPPDATA%\JicanSimulator\`**（`config.json` / `settings.json` / `id.key` / `saves/` / `logs/`），可用环境变量 `JICAN_DATA_DIR` 覆盖（便携版、共享电脑、CI）。
 - **无黑框启动（新增 `jican-simulator-launcher.exe`）**：Node SEA 产物必然是控制台程序，双击必弹黑框、关掉黑框服务就停。发行版因此拆成两层——`jican-simulator-launcher.exe` 是 GUI 子系统（`/target:winexe`）外壳，内嵌一份 node 运行时与启动脚本，首次运行释放到 `%LOCALAPPDATA%\JicanSimulator\runtime\rt-<指纹>\`，再用 `CREATE_NO_WINDOW` 拉起 `jican-simulator.exe --serve`。**快捷方式指向 launcher**；需要看日志时用开始菜单的「（调试窗口）」项（等价于 `launch -debug`，会保留黑窗口）。
 - **修复**：单文件 exe 下 `--setup` 参数被静默忽略（`isMain` 判定在 SEA 里永不成立）；设置页点击 ⚙ 无法打开（`buildBody` 的 `this` 丢失导致 `Cannot read properties of undefined (reading 'net')`）。
+
+## v0.4 变更：内嵌应用窗口 + 系统托盘
+
+以前双击启动器会拉起服务、再拿系统浏览器打开网页——**宿主机器上没装浏览器就没法玩**，而且窗口关掉后进程还藏在后台、桌面上看不到任何痕迹。
+
+- **内嵌应用窗口**：`jican-simulator-launcher.exe` 现在是 WinForms 宿主，用 **Edge WebView2** 在窗口客户区里直接渲染游戏页面（`http://127.0.0.1:<port>/`），效果等同 DeepSeekHarness 那种自带浏览器的桌面应用，但不需要背 340 MB 的 Chromium——WebView2 是 Windows 系统组件。
+- **系统托盘**：宿主常驻托盘图标（右键：显示主界面 / 在浏览器中打开 / 查看服务日志 / 重启服务 / 退出；左键单击显示或隐藏）。窗口点 X 是**最小化到托盘**，服务继续在后台跑；只有托盘「退出」才真正关停服务。
+- **三层兜底**：WebView2 可用 → 内嵌窗口；初始化失败且没装运行时 → 引导安装 Evergreen Runtime（`https://go.microsoft.com/fwlink/p/?LinkId=2124703`）；仍不行 → 退回系统默认浏览器，窗口与托盘保留（即 v0.3 行为）。
+- **调试**：开始菜单「（调试窗口）」项 = `jican-simulator-launcher.exe --debug`，保留控制台黑窗、打开 DevTools 与右键菜单。
+- **宿主链路**：`launch.exe` 直接用 `CreateProcess(CREATE_NO_WINDOW)` 拉起同目录的 `jican-simulator.exe --serve --data-dir <数据目录>`（标准句柄接到 NUL，避免子进程因句柄无效一启动就死）→ 轮询数据目录里的 `server.port` → 弹出内嵌窗口。**不再经过 `node-runtime.exe`**：它是 SEA 单文件，`argv[1]` 会被当成业务参数而不是脚本，`node-runtime.exe launcher.cjs` 实际不会执行那个脚本（进程活着、服务也起着，却什么都不写，排查时极具误导性）。
+- **数据目录**：宿主与子进程统一用 `%LOCALAPPDATA%\JicanSimulator\`。优先级 `--data-dir` 参数 > 环境变量 `JICAN_DATA_DIR` > `<exe目录>/data`——宿主自己的 `CreateProcess` 传不了自定义环境块，所以数据目录只能走命令行参数。宿主启动诊断写 `<数据目录>/logs/host.log`（WebView2 初始化与导航结果都在里面）。
+- **修复的三个真问题**：① 宿主 `CreateProcess` 时 `bInheritHandles=false`，子进程标准句柄无效、一启动就死（现在把 NUL 的句柄继承过去）；② `sea-entry.cjs` 以前只能靠环境变量拿数据目录，而宿主的 `CreateProcess` 传不了环境块，服务把 `server.port` 写到一边、宿主去 `%LOCALAPPDATA%` 读另一边，表现为「服务启动超时」而后台服务其实活着（现在改走 `--data-dir` 命令行参数）；③ WebView2 托管程序集（`Microsoft.Web.WebView2.*.dll`）与原生 `WebView2Loader.dll` 以前没随包分发，宿主一启动就 `FileNotFoundException: Microsoft.Web.WebView2.Core`。现在 `build.mjs` 会把它们拷到 `dist/<flavor>/`，Inno 脚本也会装到 `{app}` 与 `{app}\runtimes\win-x64\native\`。
+- 设计说明见 [docs/设计-v0.4-内嵌窗口与托盘.md](docs/设计-v0.4-内嵌窗口与托盘.md)。

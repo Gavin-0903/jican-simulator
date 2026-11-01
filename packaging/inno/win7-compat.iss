@@ -53,7 +53,13 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Source: "..\..\dist\win7-compat\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\dist\win7-compat\{#MyLaunchExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\dist\win7-compat\assets.json"; DestDir: "{app}"; Flags: ignoreversion
-
+; WebView2 托管程序集必须与启动器同目录（启动器是 .NET，CLR 按应用基目录找依赖）。
+; Win7 通常没有预装 WebView2，宿主会走三层兜底（见 Launch.cs FallbackToBrowser），
+; 但 dll 仍要随包装，装了运行时的那部分 Win7/Win8 机器就能用内嵌窗口。
+Source: "..\..\dist\win7-compat\Microsoft.Web.WebView2.Core.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\dist\win7-compat\Microsoft.Web.WebView2.WinForms.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\dist\win7-compat\runtimes\*"; DestDir: "{app}\runtimes"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\..\dist\win7-compat\WebView2Loader.dll"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName} {#MyAppVariant}版"; Filename: "{app}\{#MyLaunchExeName}"; IconFilename: "{app}\{#MyLaunchExeName}"

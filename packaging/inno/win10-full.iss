@@ -53,6 +53,13 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Source: "..\..\dist\win10-full\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\dist\win10-full\{#MyLaunchExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\dist\win10-full\assets.json"; DestDir: "{app}"; Flags: ignoreversion
+; WebView2 托管程序集必须与启动器同目录（启动器是 .NET，CLR 按应用基目录找依赖）。
+; 少了这两个 dll，双击会直接 FileNotFoundException: Microsoft.Web.WebView2.Core。
+Source: "..\..\dist\win10-full\Microsoft.Web.WebView2.Core.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\dist\win10-full\Microsoft.Web.WebView2.WinForms.dll"; DestDir: "{app}"; Flags: ignoreversion
+; 原生加载器：Launch.cs 先找 runtimes\win-x64\native\，找不到再找 {app} 同级，这里两处都装。
+Source: "..\..\dist\win10-full\runtimes\*"; DestDir: "{app}\runtimes"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\..\dist\win10-full\WebView2Loader.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\\..\\README.md"; DestDir: "{app}"; Flags: ignoreversion isreadme
 
 [Icons]

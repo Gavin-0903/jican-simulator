@@ -39,27 +39,45 @@ function bundleManifest() {
   }
 }
 
-/** 把 app/bundle.b64 里的 base64 载荷全部写盘（已存在则跳过）。 */
+/**
+ * 资源版本号：优先用 bundle 自带的内容哈希，没有再退回「文件数 + 大小」。
+ * 展开目录名必须带上它——旧版按「已存在就跳过」的逻辑会在升级后继续复用旧代码，
+ * 结果是服务端跑着上一个版本、宿主却在等新端点（v0.4 踩过的真实事故）。
+ */
+function bundleTag(payload) {
+  try {
+    const m = payload && payload.manifest;
+    if (m && typeof m.bundleStamp === 'string' && m.bundleStamp) return m.bundleStamp.slice(0, 16);
+  } catch {
+    /* 忽略 */
+  }
+  const keys = Object.keys((payload && payload.assets) || {});
+  return 'n' + keys.length;
+}
+
+/** 把 app/bundle.b64 里的 base64 载荷全部写盘。目录已存在则跳过（版本号已隔离新旧内容）。 */
 function unpackTo(dir) {
-  if (!bundled) return { dir, files: 0 };
+  if (!bundled) return { dir, files: 0, tag: null };
   const raw = asset('app/bundle.b64');
   console.log('[启动] bundle.b64 长度=' + (raw ? raw.length : 'null'));
-  if (!raw) return { dir, files: 0 };
+  if (!raw) return { dir, files: 0, tag: null };
   let payload = null;
   try {
     payload = JSON.parse(Buffer.from(raw, 'base64').toString('utf8'));
   } catch {
-    return { dir, files: 0 };
+    return { dir, files: 0, tag: null };
   }
+  const tag = bundleTag(payload);
+  const versioned = dir + '-' + tag;
   let files = 0;
   for (const [rel, b64] of Object.entries(payload.assets || {})) {
-    const target = join(dir, rel);
+    const target = join(versioned, rel);
     if (existsSync(target)) continue;
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, Buffer.from(b64, 'base64'));
     files += 1;
   }
-  return { dir, files };
+  return { dir: versioned, files, tag };
 }
 
 // ---------------------------------------------------------------- 启动
@@ -68,17 +86,31 @@ const devRoot = resolve(__dirname, '..');
 let rootDir = devRoot;
 if (bundled) {
   const unpacked = join(exeDir, 'data', 'unpacked');
-  const { files } = unpackTo(unpacked);
-  console.log('[启动] isSea=' + bundled + ' 展开 ' + files + ' 个资源文件到 ' + unpacked);
-  rootDir = unpacked;
+  const res = unpackTo(unpacked);
+  console.log('[启动] isSea=' + bundled + ' 展开 ' + res.files + ' 个资源文件到 ' + res.dir);
+  rootDir = res.dir;
 }
-// 运行期数据（config.json / settings.json / id.key / 存档）统一放 <exe目录>/data，
-// 与 unpacked/ 里的只读资源分开：升级、重装都不会丢配置，也不会污染资源缓存。
-globalThis.__JICAN_DATA_DIR__ = join(exeDir, 'data');
+// 运行期数据（config.json / settings.json / id.key / 存档）。
+// 优先级：环境变量 JICAN_DATA_DIR > <exe目录>/data。
+// 为什么先看环境变量：桌面宿主（launch.exe）把数据目录定在 %LOCALAPPDATA%\JicanSimulator，
+// 经 launcher.cfg 交给 launcher.cjs、再经子进程环境变量传到这里；如果这里无条件覆盖成
+// <exe目录>/data，宿主去 %LOCALAPPDATA% 读 server.port 就永远读不到，表现为「服务启动超时」。
+// 不设环境变量时（命令行直接双击 exe）仍然退回 <exe目录>/data，保持便携版语义。
+// 宿主（launch.exe）用 --data-dir 显式传数据目录：CreateProcess 不能传自定义环境块，
+// 环境变量这条路在桌面宿主下根本走不通（子进程只看到自己继承的那份 env）。
+function argDataDir(argv) {
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === '--data-dir') return argv[i + 1] || '';
+    if (argv[i].startsWith('--data-dir=')) return argv[i].slice('--data-dir='.length);
+  }
+  return '';
+}
+const rawArgv = process.argv.slice(2);
+globalThis.__JICAN_DATA_DIR__ = argDataDir(rawArgv) || process.env.JICAN_DATA_DIR || join(exeDir, 'data');
 mkdirSync(globalThis.__JICAN_DATA_DIR__, { recursive: true });
 console.log('[启动] 数据目录=' + globalThis.__JICAN_DATA_DIR__);
 
-const args = process.argv.slice(2);
+const args = rawArgv;
 const setupMode = args.includes('--setup');
 
 /**
@@ -87,7 +119,7 @@ const setupMode = args.includes('--setup');
  * 所以这里必须显式把命令行交给 runCli，否则 --setup / --port 之类的参数会被静默忽略。
  */
 function cliArgs(argv) {
-  const out = { open: false, port: null, host: null, setup: false, serverSource: null, keepOpen: false, expose: null, noTailscale: false };
+  const out = { open: false, port: null, host: null, setup: false, serverSource: null, keepOpen: false, expose: null, noTailscale: false, serve: false };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--open') out.open = true;
@@ -99,6 +131,8 @@ function cliArgs(argv) {
     else if (a === '--keep-open') out.keepOpen = true;
     else if (a === '--expose') out.expose = argv[(i += 1)] === 'funnel' ? 'funnel' : 'serve';
     else if (a === '--no-tailscale') out.noTailscale = true;
+    else if (a === '--serve' || a === '--spawn-only') out.serve = true;
+    else if (a === '--data-dir') i += 1;
   }
   return out;
 }

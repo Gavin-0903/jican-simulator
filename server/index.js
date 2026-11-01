@@ -88,6 +88,8 @@ export async function startServer(opts = {}) {
     return { ok: true, url: r.url, mode };
   };
   const actualPortRef = { value: null };
+  // 桌面宿主（v0.4）关停通道：托盘「退出」→ POST /api/app/quit → 这里登记的钩子。
+  let requestShutdown = null;
   const lobbyRouter = createLobbyRouter({
     rooms,
     idKey: idKey.key,
@@ -96,6 +98,9 @@ export async function startServer(opts = {}) {
     isServerSource,
     online: onlineState,
     switchMode,
+    // 桌面宿主（v0.4）：/api/app/ping 回显版本与端口，/api/app/quit 交给下面的 shutdown 通道。
+    appInfo: () => ({ version: config.app?.version ?? '', uptime: Math.round(process.uptime()) }),
+    requestQuit: () => requestShutdown?.('launcher'),
   });
   const stopWatch = watch ? watchBalance(rootDir, (b) => controller.setBalance(b), { logger }) : () => {};
 
@@ -129,7 +134,19 @@ export async function startServer(opts = {}) {
       writeOnlineConfig(rootDir, { serverUrl: tailscale.url, port: actualPort, enabled: true });
     }
   }
-  return { url, port: actualPort, controller, gateway, config, close, idKey: idKey.key, idKeyCreated: idKey.created, rooms, isServerSource, settings, online: onlineState, tailscale };
+  // shutdownHooks：让宿主/CLI 能优雅停服（关存档、关 ws、关 http）。幂等。
+  const shutdownHooks = [];
+  requestShutdown = (reason) => {
+    logger.info?.('[server] 收到关停请求：' + reason);
+    for (const fn of shutdownHooks) {
+      try {
+        fn(reason);
+      } catch (err) {
+        logger.warn?.('[server] 关停钩子失败：' + err.message);
+      }
+    }
+  };
+  return { url, port: actualPort, controller, gateway, config, close, idKey: idKey.key, idKeyCreated: idKey.created, rooms, isServerSource, settings, online: onlineState, tailscale, shutdownHooks, shutdown: (reason) => requestShutdown(reason ?? 'api') };
 }
 
 /** 优先以 960×600 的应用窗口打开（Chrome/Edge），失败则交给系统默认浏览器。 */
@@ -157,7 +174,7 @@ export function openBrowser(url) {
 }
 
 function parseArgs(argv) {
-  const out = { open: false, port: null, host: null, setup: false, serverSource: null, keepOpen: false, expose: null, noTailscale: false };
+  const out = { open: false, port: null, host: null, setup: false, serverSource: null, keepOpen: false, expose: null, noTailscale: false, serve: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--open') out.open = true;
@@ -169,6 +186,8 @@ function parseArgs(argv) {
     else if (a === '--keep-open') out.keepOpen = true;
     else if (a === '--expose') out.expose = argv[++i] === 'funnel' ? 'funnel' : 'serve';
     else if (a === '--no-tailscale') out.noTailscale = true;
+    // 桌面宿主（v0.4）用它告诉内核「只起服务，别开浏览器」：窗口由宿主自己的 WebView2 提供。
+    else if (a === '--serve' || a === '--spawn-only') out.serve = true;
   }
   return out;
 }
@@ -285,6 +304,19 @@ export async function runCli(args) {
     };
     process.on('SIGINT', stop);
     process.on('SIGTERM', stop);
+    // 桌面宿主（v0.4）：宿主不靠 stdout 猜状态，统一从数据目录的 server.port 读端口；
+    // 托盘「退出」走 POST /api/app/quit，这里挂上同样的优雅关停路径。
+    try {
+      const { writeFileSync, rmSync } = await import('node:fs');
+      writeFileSync(join(dataDir(), 'server.port'), String(srv.port), 'utf8');
+      srv.shutdownHooks.push(() => {
+        // 先删端口文件，宿主据此判断「服务已停」，避免它去连一个已经死掉的端口
+        try { rmSync(join(dataDir(), 'server.port'), { force: true }); } catch { /* 忽略 */ }
+        stop();
+      });
+    } catch (err) {
+      logger.warn?.('[server] 写 server.port 失败：' + err.message);
+    }
   } catch (err) {
     console.error(`[server] 启动失败：${err.message}`);
     process.exit(1);

@@ -36,7 +36,13 @@ export function createLobbyRouter({
   // 由 server/index.js 在 TailScale 就绪后回填；switchMode 用于设置页切换 serve/funnel。
   online = null,
   switchMode = null,
+  // 桌面宿主（v0.4）：内嵌 WebView2 窗口需要知道「这个端口上是不是我们的服务」，并能在托盘「退出」时关停它。
+  // 只实现这两个控制端点，别的什么都不暴露；quit 还要求请求来自回环地址 + launcher 标记头。
+  appInfo = null,
+  requestQuit = null,
 }) {
+  const isLoopback = (addr) => addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+
   return (req, res) => {
     crossOriginOk(res);
     if (req.method === 'OPTIONS') {
@@ -91,6 +97,42 @@ export function createLobbyRouter({
         const out = await switchMode(mode);
         send(res, out.ok ? 200 : 500, { ok: Boolean(out.ok), mode, serverUrl: out.url ?? '', error: out.ok ? undefined : out.message ?? '切换失败' });
       });
+      return true;
+    }
+    // ---- 桌面宿主控制端点（v0.4）
+    // 宿主（launch.exe）启动内核后靠 ping 确认端口上跑的是本游戏，而不是别的软件占着同一端口。
+    if (path === '/api/app/ping') {
+      let extra = {};
+      try {
+        extra = (typeof appInfo === 'function' ? appInfo() : appInfo) ?? {};
+      } catch {
+        extra = {};
+      }
+      send(res, 200, { ok: true, app: 'jican-simulator', pid: process.pid, ...extra });
+      return true;
+    }
+    // 托盘菜单「退出」→ 宿主调用这里优雅关停；必须是本机 + 带 launcher 标记头。
+    // （网页里的第三方脚本既跨不过 CSP connect-src 'self'，也拿不到这个头，双重保险。）
+    if (path === '/api/app/quit') {
+      if (req.method !== 'POST') {
+        send(res, 405, { ok: false, error: '只接受 POST' });
+        return true;
+      }
+      if (!isLoopback(req.socket?.remoteAddress)) {
+        send(res, 403, { ok: false, error: '只允许本机调用' });
+        return true;
+      }
+      if (String(req.headers['x-jican-client'] ?? '') !== 'launcher') {
+        send(res, 403, { ok: false, error: '缺少启动器标记' });
+        return true;
+      }
+      if (typeof requestQuit !== 'function') {
+        send(res, 501, { ok: false, error: '本实例未启用宿主控制' });
+        return true;
+      }
+      send(res, 200, { ok: true });
+      // 先把响应发出去再关停，否则宿主侧会看到连接被重置
+      setTimeout(() => { try { requestQuit(); } catch { /* 忽略 */ } }, 30);
       return true;
     }
     if (path === '/api/net/room') {

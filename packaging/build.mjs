@@ -12,6 +12,7 @@
 //    首次启动时展开到 <exe目录>/data/unpacked/ 再按普通文件托管；不写注册表、不需要管理员。
 //  - 注入用 postject：npm i -D postject 后可用；没有装就跳过注入并提示。
 
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
@@ -85,10 +86,19 @@ for (const pkg of INCLUDE_PKGS) {
 }
 
 const assets = {};
-for (const rel of files) assets[rel] = readFileSync(join(ROOT, rel)).toString('base64');
+// bundleStamp：全部资源内容的 sha256 前 16 位。SEA 展开目录用它做版本后缀，
+// 否则「已存在就跳过」会让升级后的新 exe 继续跑上次展开的旧代码（v0.4 的真实事故）。
+const bundleHash = createHash('sha256');
+for (const rel of files) {
+  const bytes = readFileSync(join(ROOT, rel));
+  bundleHash.update(rel);
+  bundleHash.update(bytes);
+  assets[rel] = bytes.toString('base64');
+}
+const bundleStamp = bundleHash.digest('hex').slice(0, 16);
 // manifest 里显式写明安装包名，供 .iss 生成时的 [Run]/快捷方式引用
 const setupName = `${productName}-v${version}-setup-${stamp}`;
-const manifest = { flavor, variant, version, exeName, setupName, productName, appId, builtAt: new Date().toISOString(), files: files.length };
+const manifest = { flavor, variant, version, exeName, setupName, productName, appId, builtAt: new Date().toISOString(), files: files.length, bundleStamp };
 writeFileSync(join(JSON_OUT, 'assets.json'), JSON.stringify({ manifest, assets }));
 console.log(`[build] 收集 ${files.length} 个文件 → ${join('dist', flavor, 'assets.json')}`);
 
@@ -179,14 +189,45 @@ function ensureLaunchTools() {
     return false;
   }
   mkdirSync(binDir, { recursive: true });
+  // 外壳依赖：压缩库（解 RCDATA/2 的 zip）+ WinForms/System.Drawing（窗口与托盘）+ WebView2 托管程序集。
   const refs = ['/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll'];
+  // WebView2 托管 DLL 随仓库分发（packaging/win/lib），缺了会 CS0234，必须显式引用。
+  const wv2Core = join(ROOT, 'packaging', 'win', 'lib', 'Microsoft.Web.WebView2.Core.dll');
+  const wv2Forms = join(ROOT, 'packaging', 'win', 'lib', 'Microsoft.Web.WebView2.WinForms.dll');
+  const winRefs = [
+    '/reference:' + wv2Core,
+    '/reference:' + wv2Forms,
+    '/reference:System.Windows.Forms.dll',
+    '/reference:System.Drawing.dll',
+    '/reference:System.Net.dll',
+  ];
   const stale = (src, out) => !existsSync(out) || statSync(src).mtimeMs > statSync(out).mtimeMs;
   ensureIconTool(); // LaunchGen 引用 IconRes.exe，必须先编译出来
-  if (stale(launchSrc, launchStub)) {
+  // WebView2 托管 dll 必须与 Launch.exe 同目录：csc 只把程序集引用写进元数据，
+  // 运行期由 CLR 按「应用基目录 + PATH」去找文件。少了这两个 dll，双击直接
+  // FileNotFoundException: Microsoft.Web.WebView2.Core。所以编译完就把它们拷到外壳旁边。
+  const stageWv2 = (destDir) => {
+    mkdirSync(destDir, { recursive: true });
+    for (const f of ['Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.WinForms.dll']) {
+      const src = join(ROOT, 'packaging', 'win', 'lib', f);
+      if (existsSync(src)) copyFileSync(src, join(destDir, f));
+    }
+    // 原生加载器：Launch.cs 先找 runtimes\win-x64\native\，找不到再找 exe 同级。
+    const nativeSrc = join(ROOT, 'packaging', 'win', 'lib', 'runtimes', 'win-x64', 'native', 'WebView2Loader.dll');
+    if (existsSync(nativeSrc)) {
+      const nd = join(destDir, 'runtimes', 'win-x64', 'native');
+      mkdirSync(nd, { recursive: true });
+      copyFileSync(nativeSrc, join(nd, 'WebView2Loader.dll'));
+      copyFileSync(nativeSrc, join(destDir, 'WebView2Loader.dll'));
+    }
+  };
+  if (stale(launchSrc, launchStub) || stale(wv2Core, launchStub)) {
     console.log('[build] 编译 GUI 外壳 Launch.exe…');
     // 必须 /target:winexe（Subsystem=2），否则双击仍然弹黑框
-    execFileSync(csc, ['/nologo', '/target:winexe', '/out:' + launchStub, ...refs, launchSrc], { stdio: 'inherit' });
+    execFileSync(csc, ['/nologo', '/target:winexe', '/out:' + launchStub, ...refs, ...winRefs, launchSrc], { stdio: 'inherit' });
   }
+  stageWv2(binDir);
+  stageWv2(JSON_OUT);
   if (stale(launchGenSrc, launchGen) || stale(launchSrc, launchGen)) {
     console.log('[build] 编译外壳生成器 LaunchGen.exe…');
     execFileSync(csc, ['/nologo', '/target:exe', '/out:' + launchGen, '/reference:' + iconExe, ...refs, launchGenSrc], { stdio: 'inherit' });

@@ -43,6 +43,9 @@ internal static class LaunchGen
             int read = 0;
             while (read < nodeBytes.Length) read += fs.Read(nodeBytes, read, nodeBytes.Length - read);
         }
+        // extraFiles（v0.4）：宿主自己要用的托管 DLL（WebView2 的两个）不能内嵌进 exe ——
+        // 它们是 CLR 在宿主启动时按需加载的，所以由安装包平铺到 exe 同目录，这里不参与打包。
+        // 保持参数只为兼容，当前不追加任何额外条目。
         byte[] payload = ZipOne("launcher.cjs", File.ReadAllBytes(jsPath));
 
         // 模板必须是 winsubsystem=2 的 GUI 程序（Launch.exe，由 build.mjs 用 /target:winexe 编译），
