@@ -141,6 +141,92 @@ export async function setupTailscale({ port, expose = 'serve', logger = console 
   return { ok: true, bin, url, dnsName: running.status?.dnsName ?? '', expose, status: running.status, exposed };
 }
 
+/**
+ * 设置页三选一切换暴露方式：'tailnet' | 'funnel' | 'off'。
+ * 与 setupTailscale/exposePort 的区别：这里要「先把不想要的规则撤掉再建新的」，
+ * 并且每一步失败都只返回结构化结果、绝不抛；funnel 失败时保留 serve 生效（降级成 tailnet 而不是全关）。
+ *
+ * 返回 { ok, mode, url, dnsName, code?, message?, steps:[{cmd, ok, code, message}] }
+ */
+export async function setExposeMode(bin, { port, mode } = {}, { run = runTailscale, logger = console, statusFn = tailscaleStatus } = {}) {
+  const b = bin || findTailscale();
+  const m = mode === 'funnel' ? 'funnel' : mode === 'off' ? 'off' : mode === 'tailnet' || mode === 'serve' ? 'tailnet' : null;
+  if (!m) return { ok: false, mode: String(mode ?? ''), code: 'bad-mode', message: 'mode 只能是 tailnet / funnel / off', steps: [] };
+  if (!b) return { ok: false, mode: m, code: 'no-binary', message: '未安装 TailScale', steps: [] };
+
+  const steps = [];
+  const step = async (args, { timeoutMs = 20000, quiet = false } = {}) => {
+    let r;
+    try {
+      r = await run(b, args, { timeoutMs });
+    } catch (err) {
+      r = { ok: false, code: 'throw', stdout: '', stderr: String(err && err.message ? err.message : err) };
+    }
+    const entry = { cmd: 'tailscale ' + args.join(' '), ok: Boolean(r && r.ok), code: (r && r.code) || null, message: (r && r.stderr ? String(r.stderr).split('\n').filter(Boolean)[0] : '') || '' };
+    steps.push(entry);
+    if (!entry.ok && !quiet) logger.warn?.('[tailscale] ' + entry.cmd + ' 失败：' + (entry.message || entry.code));
+    return entry;
+  };
+  // 只读一次节点状态给 URL 回填用（判定是否可用仍以 serve/funnel 命令本身为准，
+  // 这样即使 status 读不到也不影响「刷新后能打开」的功能）。绝不抛。
+  let statusCache = null;
+  const status = async () => {
+    if (statusCache) return statusCache;
+    try {
+      const st = await statusFn(b);
+      statusCache = { ok: Boolean(st && st.ok), url: (st && st.url) || '', dnsName: (st && st.dnsName) || '' };
+    } catch {
+      statusCache = { ok: false, url: '', dnsName: '' };
+    }
+    return statusCache;
+  };
+  const finish = async (extra = {}) => {
+    const st = await status();
+    return { url: st.url || '', dnsName: st.dnsName || '', steps, ...extra };
+  };
+
+  // 1) 全关：serve reset + funnel reset（任何一步失败都继续，尽量把状态清干净）
+  if (m === 'off') {
+    const a = await step(['serve', 'reset'], { timeoutMs: 10000, quiet: true });
+    const c = await step(['funnel', 'reset'], { timeoutMs: 10000, quiet: true });
+    const out = await finish({ ok: true, mode: 'off' });
+    if (!a.ok && !c.ok) {
+      return { ...out, ok: false, code: 'reset-failed', message: '撤销 serve/funnel 规则失败（可能本来就没配置）' };
+    }
+    return out;
+  }
+
+  const p = Number(port);
+  if (!Number.isInteger(p) || p <= 0 || p > 65535) return { ok: false, mode: m, code: 'bad-port', message: '端口不合法：' + String(port), steps };
+
+  // 2) 仅 tailnet：先撤 funnel（静默失败），再 serve --bg <port>
+  if (m === 'tailnet') {
+    await step(['funnel', 'reset'], { timeoutMs: 10000, quiet: true });
+    const s = await step(['serve', '--bg', String(p)]);
+    if (!s.ok) {
+      return { ...(await finish()), ok: false, mode: m, code: 'serve-failed', message: 'tailscale serve 失败：' + (s.message || s.code) };
+    }
+    return { ...(await finish()), ok: true, mode: 'tailnet' };
+  }
+
+  // 3) funnel：先 serve 生效，再 funnel 开公网；funnel 失败保留 serve（降级成 tailnet）
+  const s = await step(['serve', '--bg', String(p)]);
+  if (!s.ok) {
+    return { ...(await finish()), ok: false, mode: m, code: 'serve-failed', message: 'tailscale serve 失败，未改动 funnel：' + (s.message || s.code) };
+  }
+  const f = await step(['funnel', '--bg', String(p)]);
+  if (!f.ok) {
+    return {
+      ...(await finish()),
+      ok: false,
+      mode: 'tailnet',
+      code: 'funnel-unavailable',
+      message: 'funnel 未开起来（' + (f.message || f.code) + '）；已回滚为仅 tailnet 可见（serve 仍生效）',
+    };
+  }
+  return { ...(await finish()), ok: true, mode: 'funnel' };
+}
+
 /** 生成联机 Token（256 位 hex）。 */
 export function makeOnlineToken() {
   const bytes = new Uint8Array(128);

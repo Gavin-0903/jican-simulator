@@ -20,7 +20,8 @@ import { createLobbyRouter } from './net/LobbyHttp.js';
 import { applySetup, readSettings, writeSettings } from './persistence/AppSettings.js';
 import { enableServerSource, readOnlineConfig, writeOnlineConfig } from './persistence/OnlineConfig.js';
 import { dataDir } from './persistence/paths.js';
-import { findTailscale, makeOnlineToken, resetExpose, setupTailscale, tailscaleInstalled, tailscaleVersion } from './net/TailScale.js';
+import { findTailscale, makeOnlineToken, resetExpose, runTailscale, setExposeMode, setupTailscale, tailscaleInstalled, tailscaleStatus, tailscaleVersion } from './net/TailScale.js';
+import { classifyMode, diffConfig, funnelCaps, funnelPortNote, maskToken, readServeConfig } from './net/OnlineAdmin.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -38,6 +39,18 @@ function listen(server, host, port) {
     server.once('listening', onListening);
     server.listen(port, host);
   });
+}
+
+/**
+ * 把配置里的 mode 归一成设置页的三选一：'tailnet' | 'funnel' | 'off'。
+ * 旧配置里的 'serve' 就是「仅 tailnet 可见」，历史数据要能平滑读进来。
+ */
+function toExposeMode(mode) {
+  const m = String(mode ?? '').trim().toLowerCase();
+  if (m === 'funnel') return 'funnel';
+  if (m === 'off' || m === 'none' || m === 'disabled') return 'off';
+  if (m === 'tailnet' || m === 'serve' || m === 'tsnet') return 'tailnet';
+  return null;
 }
 
 /** 端口被占用时依次尝试后续端口。 */
@@ -74,22 +87,118 @@ export async function startServer(opts = {}) {
   // 这里是唯一的事实来源（settings.isServerSource 只作为兜底）。
   const online = opts.online ?? readOnlineConfig(rootDir);
   const isServerSource = Boolean(opts.isServerSource ?? (online.enabled || settings.isServerSource));
+  // 配置里可能还是老值 'serve'（= 仅 tailnet 可见），对外统一说成 'tailnet'。
+  const initialMode = toExposeMode(online.mode) || 'tailnet';
   if (isServerSource && config.app.server.host === '127.0.0.1' && !host) config.app.server.host = '0.0.0.0';
   // 大厅路由总是挂载：非服务器源实例也提供 /api/net/info & /api/net/join 作为「联机客户端」，
   // 由请求里的服务器源 URL 决定真正打到哪台机器（跨域已放开）。isServerSource 只影响是否对外监听。
-  const onlineState = { enabled: Boolean(online.enabled), mode: online.mode ?? 'serve', serverUrl: online.serverUrl ?? '', token: online.token ?? '', port: null };
-  const switchMode = async (mode) => {
-    const port = actualPortRef.value ?? config.app.server.port;
-    const r = await setupTailscale({ port, expose: mode, logger });
-    if (!r.ok) return { ok: false, message: r.message ?? '切换失败' };
-    onlineState.mode = mode;
-    onlineState.serverUrl = r.url;
-    writeOnlineConfig(rootDir, { mode, serverUrl: r.url });
-    return { ok: true, url: r.url, mode };
-  };
+  const onlineState = { enabled: Boolean(online.enabled), mode: initialMode, serverUrl: online.serverUrl ?? '', token: online.token ?? '', port: online.port ?? null };
   const actualPortRef = { value: null };
+  const bin = findTailscale();
+  // tailscale 探测结果的 1.5s 内存缓存：设置页一打开会连着问 admin + online，没必要跑两遍 CLI。
+  let tailscaleCache = null;
+  /**
+   * 设置页三选一切换（tailnet / funnel / off）。
+   * 成功才落盘：off 时 enabled=false、地址清空；tailnet/funnel 时 enabled=true 并回填 https 地址。
+   * funnel 起不来时 setExposeMode 已把规则保持为 serve（仅 tailnet），这里只回报失败原因，不改配置。
+   */
+  const switchMode = async (mode) => {
+    const want = toExposeMode(mode);
+    if (!want) return { ok: false, code: 'bad-mode', message: 'mode 只能是 tailnet、funnel 或 off' };
+    const port = actualPortRef.value ?? config.app.server.port;
+    if (!bin) return { ok: false, code: 'no-binary', message: '本机没有安装 TailScale' };
+    const r = await setExposeMode(bin, { port, mode: want }, { logger });
+    if (!r.ok) return { ok: false, code: r.code ?? 'switch-failed', message: r.message ?? '切换失败', url: r.url ?? '', mode: onlineState.mode };
+    if (want === 'off') {
+      onlineState.enabled = false;
+      onlineState.mode = 'off';
+      onlineState.serverUrl = '';
+      writeOnlineConfig(rootDir, { enabled: false, mode: 'off', serverUrl: '' });
+      tailscaleCache = null;
+      return { ok: true, url: '', mode: 'off' };
+    }
+    const url = r.url || onlineState.serverUrl || '';
+    onlineState.enabled = true;
+    onlineState.mode = want;
+    onlineState.serverUrl = url;
+    onlineState.port = port;
+    writeOnlineConfig(rootDir, { enabled: true, mode: want, serverUrl: url, port });
+    tailscaleCache = null;
+    return { ok: true, url, mode: want };
+  };
+  const refreshTailscaleFacts = async ({ force = false } = {}) => {
+    const now = Date.now();
+    if (!force && tailscaleCache && now - tailscaleCache.at < 1500) return tailscaleCache.value;
+    const version = bin ? (await tailscaleVersion(bin)) : { ok: false, stdout: '' };
+    const st = bin ? await tailscaleStatus(bin) : { ok: false, backendState: '', hostname: '', dnsName: '', url: '', loggedIn: false };
+    const rawStatus = bin ? await runTailscale(bin, ['status', '--json'], { timeoutMs: 10000 }) : { ok: false, stdout: '' };
+    const caps = funnelCaps(rawStatus.ok ? rawStatus.stdout : null);
+    const serve = await readServeConfig(bin);
+    const cls = classifyMode(serve);
+    const value = {
+      installed: Boolean(bin),
+      bin: bin || '',
+      version: version.ok ? String(version.stdout || '').split('\n')[0].trim() : '',
+      running: Boolean(st.ok),
+      loggedIn: Boolean(st.loggedIn),
+      backendState: st.backendState ?? '',
+      hostname: st.hostname ?? '',
+      dnsName: st.dnsName ?? serve.dnsName ?? '',
+      url: st.url ?? '',
+      ips: Array.isArray(st.ips) ? st.ips : [],
+      funnelCapable: caps.funnelCapable,
+      funnelPorts: caps.funnelPorts,
+      funnelReason: caps.reason,
+      funnelNote: funnelPortNote(),
+      serve,
+      classify: cls,
+      portFile: join(dataDir(), 'config.json'),
+    };
+    tailscaleCache = { at: now, value };
+    return value;
+  };
   // 桌面宿主（v0.4）关停通道：托盘「退出」→ POST /api/app/quit → 这里登记的钩子。
   let requestShutdown = null;
+  /** 设置页 GET /api/net/admin 的整包事实（只给脱敏数据：token 只给 mask，idKey 只给 hint）。 */
+  const adminInfo = async () => {
+    const facts = await refreshTailscaleFacts();
+    const port = actualPortRef.value ?? config.app.server.port;
+    const expose = { enabled: Boolean(onlineState.enabled), mode: onlineState.mode, port, actualPort: port, serverUrl: onlineState.serverUrl };
+    const drift = diffConfig({ expose, isServerSource, tailscale: facts, actualPort: port }, facts.serve);
+    const mt = maskToken(onlineState.token);
+    const roomList = [...rooms.rooms.values()].map((r) => {
+      const v = rooms.view(r);
+      return { id: v.id, owner: v.owner, members: v.members, memberCount: v.members.length, createdAt: v.createdAt };
+    });
+    return {
+      app: { name: config.app?.name ?? 'jican-simulator', version: config.app?.version ?? '', pid: process.pid },
+      dataDir: dataDir(),
+      portFile: join(dataDir(), 'config.json'),
+      port,
+      idKey: { hint: `${String(idKey.key).slice(0, 8)}…`, length: String(idKey.key).length, file: idKey.file ?? '' },
+      online: { enabled: Boolean(onlineState.enabled), mode: onlineState.mode, serverUrl: onlineState.serverUrl, port: onlineState.port, hasToken: mt.present, tokenMasked: mt.masked, tokenLength: mt.length },
+      tailscale: {
+        installed: facts.installed,
+        version: facts.version,
+        running: facts.running,
+        backendState: facts.backendState,
+        hostname: facts.hostname,
+        dnsName: facts.dnsName,
+        url: facts.url,
+        funnelCapable: facts.funnelCapable,
+        funnelPorts: facts.funnelPorts,
+        funnelNote: facts.funnelNote,
+        mode: facts.classify.mode,
+        tailnetAvailable: facts.classify.tailnetAvailable,
+        servePort: facts.classify.port,
+        serveStatus: facts.serve,
+      },
+      rooms: { count: roomList.length, list: roomList },
+      settings,
+      isServerSource,
+      drift,
+    };
+  };
   const lobbyRouter = createLobbyRouter({
     rooms,
     idKey: idKey.key,
@@ -98,6 +207,22 @@ export async function startServer(opts = {}) {
     isServerSource,
     online: onlineState,
     switchMode,
+    adminInfo,
+    tailscaleFacts: refreshTailscaleFacts,
+    // 设置页「显示完整 Token」/「重新生成 Token」（v0.5）。
+    // 两处都只在本机回环 + Host 校验通过后才会被 LobbyHttp 调用。
+    readToken: () => ({ token: String(onlineState.token || '') }),
+    regenerateToken: async () => {
+      const token = makeOnlineToken();
+      onlineState.token = token;
+      // 落盘：config.json 的 online.token，重启后仍是同一个 token
+      writeOnlineConfig(rootDir, { token });
+      // 旧 token 立刻失效：服务器源上已建房间都绑着旧 token，直接清空让玩家重新加入
+      if (rooms && rooms.rooms && typeof rooms.rooms.clear === 'function') rooms.rooms.clear();
+      const mt = maskToken(token);
+      logger.info?.('[net] 联机 Token 已重新生成（旧 Token 立即失效）');
+      return { token, masked: mt.masked, length: mt.length, ok: true };
+    },
     // 桌面宿主（v0.4）：/api/app/ping 回显版本与端口，/api/app/quit 交给下面的 shutdown 通道。
     appInfo: () => ({ version: config.app?.version ?? '', uptime: Math.round(process.uptime()) }),
     requestQuit: () => requestShutdown?.('launcher'),
@@ -126,14 +251,17 @@ export async function startServer(opts = {}) {
   // 联机自启：只有「服务器源」实例才把本机端口通过 TailScale 暴露出去（默认 serve，可切 funnel）。
   // 失败不影响单机游玩，只记日志并在返回值里说明原因。
   let tailscale = null;
-  if (opts.tailscale !== false && isServerSource && online.enabled) {
-    tailscale = await setupTailscale({ port: actualPort, expose: onlineState.mode, logger });
+  // mode='off'（用户在设置页关掉了联机）时不再自启暴露；tailnet/funnel 才走 setupTailscale。
+  if (opts.tailscale !== false && isServerSource && online.enabled && onlineState.mode !== 'off') {
+    // setupTailscale 只认 'serve'|'funnel'（语义未变），所以这里把 tailnet 折回 'serve'。
+    tailscale = await setupTailscale({ port: actualPort, expose: onlineState.mode === 'funnel' ? 'funnel' : 'serve', logger });
     if (tailscale.ok) {
       onlineState.serverUrl = tailscale.url;
       onlineState.port = actualPort;
-      writeOnlineConfig(rootDir, { serverUrl: tailscale.url, port: actualPort, enabled: true });
+      writeOnlineConfig(rootDir, { serverUrl: tailscale.url, port: actualPort, enabled: true, mode: onlineState.mode });
     }
   }
+  tailscaleCache = null; // 暴露规则刚变过，缓存作废
   // shutdownHooks：让宿主/CLI 能优雅停服（关存档、关 ws、关 http）。幂等。
   const shutdownHooks = [];
   requestShutdown = (reason) => {
@@ -146,7 +274,7 @@ export async function startServer(opts = {}) {
       }
     }
   };
-  return { url, port: actualPort, controller, gateway, config, close, idKey: idKey.key, idKeyCreated: idKey.created, rooms, isServerSource, settings, online: onlineState, tailscale, shutdownHooks, shutdown: (reason) => requestShutdown(reason ?? 'api') };
+  return { url, port: actualPort, controller, gateway, config, close, idKey: idKey.key, idKeyCreated: idKey.created, rooms, isServerSource, settings, online: onlineState, tailscale, adminInfo, refreshTailscaleFacts, readToken: () => ({ token: String(onlineState.token || '') }), shutdownHooks, shutdown: (reason) => requestShutdown(reason ?? 'api') };
 }
 
 /** 优先以 960×600 的应用窗口打开（Chrome/Edge），失败则交给系统默认浏览器。 */

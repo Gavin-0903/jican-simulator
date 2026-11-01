@@ -5,7 +5,7 @@
 // 合并后交给服务端，效果等价于「修改 config.json 开启联机功能」，但不会污染基线。
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { dataDir } from './paths.js';
 
 /**

@@ -85,7 +85,9 @@
   box-shadow: var(--shadow-2);
 }
 .modal {
-  width: min(440px, 100%); max-height: calc(100dvh - 32px); overflow: auto;
+  width: min(440px, 100%);
+  /* 超高时只让正文滚动：标题和按钮永远可见（设置页内容很长）。 */
+  max-height: calc(100dvh - 32px); overflow: auto; overscroll-behavior: contain;
   padding: 18px 18px 16px;
   animation: pop-in 240ms var(--ease);
 }
@@ -97,7 +99,7 @@
 .modal-head .icon-wrap.gold { color: var(--accent-player); }
 .modal-title { font-size: var(--fs-lg); font-weight: 700; line-height: 1.25; }
 .modal-sub { color: var(--text-3); font-size: var(--fs-sm); }
-.modal-body { display: grid; gap: 10px; }
+.modal-body { display: grid; gap: 10px; align-content: start; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 .modal-foot .spacer { flex: 1; }
 .note { font-size: var(--fs-sm); color: var(--text-2); padding: 8px 10px; border-radius: var(--radius-btn); background: var(--bg-panel-2); border: 1px solid var(--line); display: flex; gap: 8px; align-items: flex-start; }
@@ -477,3 +479,100 @@ input[type="text"], input[type="number"], input:not([type]), textarea {
 @keyframes float-up { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-46px); } }
 @keyframes dash { to { stroke-dashoffset: -60; } }
 @keyframes ring-out { from { opacity: 1; transform: scale(.4); } to { opacity: 0; transform: scale(1.8); } }
+
+/* ---------------------------------------------------------------- 设置页：多标签联机控制台 */
+/* 只在本节新增 .settings-* 选择器；颜色一律走 theme.css 的 :root 变量，深色主题下可读。 */
+
+/* 弹窗加宽到 760px 时正文可容纳「标签 + 多块信息」 */
+.modal.settings-wide { width: min(760px, 100%); }
+
+/* 标签条：复用 .segmented 的外观，只把尺寸拉开、占满一行 */
+.settings-tabs {
+  display: flex; width: 100%; gap: 4px; padding: 4px;
+  background: #141926; border: 1px solid var(--line); border-radius: 10px;
+}
+.settings-tabs button { flex: 1 1 0; justify-content: center; height: 32px; }
+
+/* 每个信息块 */
+.settings-block {
+  /* 用 flex 而不是 grid：grid 的隐式行会吃掉子元素的 display，
+     历史上有过「块标题行 .settings-block-head 明明在 DOM 里却不渲染」的排查坑。 */
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 12px;
+  border-radius: var(--radius-btn); border: 1px solid var(--line);
+  background: var(--bg-panel-2);
+}
+.settings-block-head { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--text-2); }
+.settings-block-head .spacer { flex: 1; }
+/* 标题行可能被塞进任意元素（旧脚本会过滤类选择器），所以不依赖 .spacer，
+   直接让「标题后面的按钮」靠右：倒数第二个起（复制 / 显示完整）自动被推到右侧。 */
+.settings-block-head > .btn { margin-left: 0; }
+.settings-block-head > .spacer + .btn,
+.settings-block-head > .ico + .settings-block-title + .btn { margin-left: auto; }
+.settings-block-title { font-weight: 650; color: var(--text); letter-spacing: .02em; }
+.settings-block-head .ico { color: var(--text-3); }
+
+/* 键值表（在块内：标签列更窄一些） */
+.settings-kv { grid-template-columns: minmax(64px, auto) 1fr; gap: 5px 12px; }
+.settings-kv dt { color: var(--text-3); white-space: nowrap; }
+.settings-kv dd { min-width: 0; }
+.settings-kv.settings-sub { padding-top: 6px; border-top: 1px dashed var(--line); }
+.settings-mono { font-family: var(--mono); font-size: var(--fs-sm); word-break: break-all; }
+.settings-kv code.settings-mono { color: var(--text-2); }
+
+/* 密钥 / Token 的折叠值 */
+.settings-secret {
+  padding: 8px 10px; border-radius: var(--radius-btn);
+  background: #141926; border: 1px dashed var(--line-strong);
+  color: var(--accent-player); user-select: text; -webkit-user-select: text;
+  cursor: text;
+}
+.settings-secret.settings-secret-mask { color: var(--text-3); cursor: default; user-select: none; }
+.settings-secret-value { font-family: var(--mono); font-size: var(--fs-sm); line-height: 1.6; word-break: break-all; white-space: pre-wrap; }
+
+/* 状态文字：已启动 / 未启动 */
+.settings-status-on { color: var(--ok); font-weight: 650; }
+.settings-status-off { color: var(--text-3); font-weight: 650; }
+
+/* 按钮行 */
+.settings-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.settings-stamp { margin-left: auto; }
+
+/* 「房间数」这种看起来像链接的按钮 */
+.btn.settings-link { height: 24px; padding: 0 8px; font-size: var(--fs-sm); color: var(--accent-student); }
+
+/* 房间列表 */
+.settings-rooms {
+  width: 100%; border-collapse: collapse; font-size: var(--fs-sm);
+  border: 1px solid var(--line); border-radius: var(--radius-btn); overflow: hidden;
+}
+.settings-rooms th, .settings-rooms td { padding: 5px 9px; text-align: left; border-bottom: 1px solid var(--line); }
+.settings-rooms th { color: var(--text-3); font-weight: 600; background: #141926; }
+.settings-rooms tr:last-child td { border-bottom: 0; }
+.settings-rooms td { color: var(--text-2); }
+
+/* 三选一模式切换：撑满一行，长文案不被截断 */
+.settings-modes { display: flex; width: 100%; }
+.settings-modes button { flex: 1 1 0; justify-content: center; padding: 0 8px; white-space: nowrap; }
+.settings-modes button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Funnel 不可用原因列表 */
+.settings-reasons { margin: 2px 0 0; padding-left: 16px; display: grid; gap: 2px; }
+.settings-reasons li { font-size: var(--fs-xs); }
+
+/* 配置漂移警示条 */
+.settings-drift {
+  display: grid; gap: 8px; padding: 10px 12px;
+  border-radius: var(--radius-btn);
+  border: 1px solid rgba(255, 181, 71, .38); background: rgba(255, 181, 71, .08);
+}
+.settings-drift-head { display: flex; align-items: center; gap: 8px; color: var(--warn); font-size: var(--fs-sm); }
+.settings-drift-row { display: flex; align-items: flex-start; gap: 10px; }
+.settings-drift-text { flex: 1 1 auto; min-width: 0; color: #ffd59a; font-size: var(--fs-sm); }
+.settings-drift-text b { font-weight: 650; }
+
+@media (max-width: 720px) {
+  .settings-modes { flex-wrap: wrap; }
+  .settings-modes button { flex: 1 1 100%; }
+  .settings-kv { grid-template-columns: 1fr; gap: 2px; }
+  .settings-kv dt { font-size: var(--fs-xs); }
+}

@@ -152,7 +152,7 @@ npm run check-llm
 | 命令 | 作用 |
 | --- | --- |
 | `npm run dev` | 启动服务，`server/` `shared/` `config/` 变化时自动重启 |
-| `npm test` | 单元 + 集成测试（99 项） |
+| `npm test` | 单元 + 集成测试（128 项） |
 | `npm run bench` | 35 角色满负载跑 3 局，输出单 tick 耗时与包体积 |
 | `npm run lint` | 全部 JS 语法检查 + JSON 校验 |
 | `npm run check-llm` | 本地模型连通性自检 |
@@ -200,3 +200,22 @@ npm run check-llm
 - **数据目录**：宿主与子进程统一用 `%LOCALAPPDATA%\JicanSimulator\`。优先级 `--data-dir` 参数 > 环境变量 `JICAN_DATA_DIR` > `<exe目录>/data`——宿主自己的 `CreateProcess` 传不了自定义环境块，所以数据目录只能走命令行参数。宿主启动诊断写 `<数据目录>/logs/host.log`（WebView2 初始化与导航结果都在里面）。
 - **修复的三个真问题**：① 宿主 `CreateProcess` 时 `bInheritHandles=false`，子进程标准句柄无效、一启动就死（现在把 NUL 的句柄继承过去）；② `sea-entry.cjs` 以前只能靠环境变量拿数据目录，而宿主的 `CreateProcess` 传不了环境块，服务把 `server.port` 写到一边、宿主去 `%LOCALAPPDATA%` 读另一边，表现为「服务启动超时」而后台服务其实活着（现在改走 `--data-dir` 命令行参数）；③ WebView2 托管程序集（`Microsoft.Web.WebView2.*.dll`）与原生 `WebView2Loader.dll` 以前没随包分发，宿主一启动就 `FileNotFoundException: Microsoft.Web.WebView2.Core`。现在 `build.mjs` 会把它们拷到 `dist/<flavor>/`，Inno 脚本也会装到 `{app}` 与 `{app}\runtimes\win-x64\native\`。
 - 设计说明见 [docs/设计-v0.4-内嵌窗口与托盘.md](docs/设计-v0.4-内嵌窗口与托盘.md)。
+
+## v0.5 变更：设置页 = 联机控制台
+
+双击应用窗口右上角 ⚙（或按设置键）打开**设置**，现在是一个带三个标签（**联机 / 画面 / 操作**）的联机控制台，所有数据都是打开面板那一刻向本机服务端实时问的，不是前端猜的。
+
+| 区块 | 能看到什么 | 能做什么 |
+| --- | --- | --- |
+| **ID 密钥** | 掩码 `5361d110…`、`<数据目录>\id.key`、长度 256 字符（256 位十六进制） | 「显示完整」展开全文、「复制」（走按钮，游戏内已禁用 Ctrl+C） |
+| **本机联机服务器** | 运行状态灯（已启动 / 未启动）、本页地址、监听地址、对外地址（`https://<节点>.<tailnet>.ts.net`）、数据目录、房间数（可展开列表）、监听端口 | 「开启联机」「重启服务器」，端口在 5173（默认）/ 当前端口 之间切 |
+| **联机 Token** | 掩码 `928890e1…4d4f`、长度 | 「显示完整」（**二次确认**后才向服务端取一次全文）、「生成 / 重新生成」（旧 Token 立刻失效，已加入的房间要重新要口令）、「复制」 |
+| **TailScale** | 版本、桌面服务、登录状态（BackendState）、节点名、MagicDNS 地址、Funnel 允许端口 | 三选一：**Serve（tailnet 内）/ Funnel（公网）/ 关闭**；切换中按钮禁用并显示「切换中…」，失败原样展示服务端原因 |
+| **配置漂移** | 配置与实际状态的 13 类不一致（如「本机联机服务器已启动但 TailScale serve 没指向它」） | 每条「一键修复」直接切模式或改配置 |
+
+- **数据来源**：`GET /api/net/admin`（回环限定，脱敏：**不含完整 Token、不含完整 ID 密钥**）、`GET /api/net/admin/token`（回环限定，取完整 Token）、`POST /api/net/token/regenerate`（回环限定，只回掩码）、`GET /api/net/online`（兜底）、`POST /api/net/online/mode`（回环限定）。非本机来源一律 403。
+- **完整 ID 密钥**仍只在 `GET /api/net/info` 的 `idKey` 字段（联机加入必需），`/api/net/admin` 只给 `hint/length/file`。
+- **Funnel 端口**：TailScale 的 Funnel 只允许 **443 / 8443 / 10000**。本机服务跑在 5173，对外靠 `tailscale serve` 把 `https://<节点>.ts.net:443` 反向代理到 `http://127.0.0.1:5173`；所以「对外地址」永远是 443 的 https 地址，改端口不会改变对外的 443 入口。
+- **安全**：面板里展开的 Token / 密钥只存在内存，不写日志、不进地址栏、不进 `console`；页面 CSP 仍是 `default-src 'self'`，没有为这个面板放宽任何一条。
+- 设计说明见 [docs/设计-v0.5-设置页联机控制台.md](docs/设计-v0.5-设置页联机控制台.md)。
+
