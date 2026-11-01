@@ -6,6 +6,8 @@ import { dist, lerp, clamp } from '../../shared/math.js';
 import { getChar, getPc, isActive, isStudent, isTeacher, releasePc } from '../core/GameState.js';
 
 const MAX_RECENT_JC = 12;
+// 道具动作由 ItemSystem 消费：InteractionSystem 只负责把它们留在队列里，不插手判定。
+const ITEM_ACTION_KINDS = new Set(['item.buy', 'item.upgrade', 'item.use']);
 
 export class InteractionSystem {
   update(state, ctx) {
@@ -14,6 +16,12 @@ export class InteractionSystem {
       const actions = c.pendingActions;
       c.pendingActions = [];
       for (const a of actions) {
+        // 道具类动作归 ItemSystem 判定（唯一判定点，不能在这里重复扣钱）；
+        // 这里必须原样放回队列，否则下面的 default 分支会把它当未知动作报错。
+        if (ITEM_ACTION_KINDS.has(a.kind)) {
+          c.pendingActions.push(a);
+          continue;
+        }
         if (c.status !== STATUS.ACTIVE) {
           ctx.fail(c, a.kind, ERR.ELIMINATED, '你已退出本局', a);
           continue;
