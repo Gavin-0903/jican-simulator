@@ -5,7 +5,7 @@ import { GameStore } from './store/GameStore.js';
 import { NetClient } from './net/NetClient.js';
 import { SvgRenderer } from './render/SvgRenderer.js';
 import { InputManager } from './input/InputManager.js';
-import { hydrateIcons } from './util/dom.js';
+import { h, hydrateIcons } from './util/dom.js';
 import { ModalHost } from './ui/Modal.js';
 import { Toast } from './ui/Toast.js';
 import { HudPanel } from './ui/HudPanel.js';
@@ -17,6 +17,8 @@ import { TeacherMenu } from './ui/TeacherMenu.js';
 import { GameOverPanel } from './ui/GameOverPanel.js';
 import { PausePanel } from './ui/PausePanel.js';
 import { SettingsPanel } from './ui/SettingsPanel.js';
+import { ConfigPanel } from './ui/ConfigPanel.js';
+import { LobbySettingsButton } from './ui/LobbySettingsButton.js';
 import { StatsPanel } from './ui/StatsPanel.js';
 import { ItemShop } from './ui/ItemShop.js';
 import { ItemBar } from './ui/ItemBar.js';
@@ -55,6 +57,18 @@ async function boot() {
   const netPanel = new NetPanel(store);
   const lobby = new Lobby($('lobby'), store, net, netPanel);
   const settings = new SettingsPanel(modals, store, renderer, net);
+  // 首页（大厅）显眼的「设置」入口：点开服务端配置面板（编辑 config.json 全部配置项）
+  const configPanel = new ConfigPanel(modals, {
+    onSaved: () => toast.show('配置已保存并生效', 'info', 'check', 2000),
+  });
+  const lobbySettingsBtn = new LobbySettingsButton(null, { onOpen: () => configPanel.show() });
+  lobby.settingsSlot = () => {
+    const slot = h('div.lobby-settings-slot');
+    lobbySettingsBtn.host = slot;
+    lobbySettingsBtn.render();
+    lobbySettingsBtn.show(store.phase === PHASE.LOBBY);
+    return slot;
+  };
   let replayCharId = null;
   const gameover = new GameOverPanel(modals, store, {
     onLobby: () => net.send(MSG.LOBBY),
@@ -193,6 +207,7 @@ async function boot() {
     // 大厅要填房间号/服务器地址、设置页要复制 ID 密钥与 Token、结算页要复制成绩——这些阶段一律放行。
     setTypingGuard(shouldGuardTyping(phase));
     lobby.show(phase === PHASE.LOBBY);
+    lobbySettingsBtn.show(phase === PHASE.LOBBY); // 首页设置入口只在 LOBBY 可见
     if (phase === PHASE.LOBBY && replayCharId && store.role === 'controller') {
       const id = replayCharId;
       replayCharId = null;

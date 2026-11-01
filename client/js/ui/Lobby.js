@@ -18,6 +18,7 @@ export class Lobby {
     this.role = this.selected.startsWith('t') ? 'teacher' : 'student';
     this.classId = this.role === 'student' ? Number(this.selected[1]) || 1 : 1;
     this.seed = '';
+    this.settingsSlot = null; // 由 main.js 传入的「设置」入口挂载点（见 LobbySettingsButton）
   }
 
   show(on) {
@@ -27,6 +28,8 @@ export class Lobby {
 
   render() {
     const lobby = this.store.lobby;
+    // 注意：settingsSlot 必须用「先取再调」的写法——this.settingsSlot 可能为 null，
+    // 每一分支只调用一次（每次调用都会新建 DOM 节点）。
     if (!lobby) {
       // 还没连上服务端时，联机面板仍然可用（它不依赖 lobby 快照）
       const netSlot = h('div.net-slot');
@@ -34,7 +37,8 @@ export class Lobby {
         h('div.lobby-top', {},
           h('img.brand-mark', { src: '/assets/icons/favicon.svg', alt: '' }),
           h('div', {}, h('div.brand-title', { text: '机惨模拟器' }), h('div.brand-sub', { text: '正在连接本地服务器…' })),
-          h('div.spacer')),
+          h('div.spacer'),
+          this.settingsSlot ? this.settingsSlot() : null),
         netSlot));
       this.netPanel?.mount(netSlot);
       return;
@@ -106,7 +110,9 @@ export class Lobby {
       h('div.lobby-top', {},
         h('img.brand-mark', { src: '/assets/icons/favicon.svg', alt: '' }),
         h('div', {}, h('div.brand-title', { text: '机惨模拟器' }), h('div.brand-sub', { text: `30 名学生 + 5 名老师 · 你扮演其中一人，其余由 AI 驱动 · 单局 ${Math.round(lobby.round.durationMs / 60000)} 分钟` })),
-        h('div.spacer'), llmBadge),
+        h('div.spacer'),
+        this.settingsSlot ? this.settingsSlot() : null,
+        llmBadge),
       netSlot,
       spectator ? h('div.note.warn', {}, icon('warn', 'sm'), '已有其他窗口在控制游戏，当前为观战模式。关闭那个窗口后刷新本页即可接管。') : null,
       resume,

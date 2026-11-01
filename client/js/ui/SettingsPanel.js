@@ -282,9 +282,30 @@ export class SettingsPanel {
     if (this.modals.kind === 'settings') this.modals.setBody('settings', this.buildBody());
   }
 
+  /** 服务端 drift 项只给 {code,label,detail,fatal}，没有 action —— 这里按 code 映射到真实可用的修复动作。 */
+  driftFixFor(code) {
+    switch (String(code || '')) {
+      case 'online-disabled-but-serve':
+      case 'online-disabled-but-funnel':
+        // 配置说「联机已关」，但 TailScale 里还留着暴露规则 → 撤掉规则即一致
+        return 'off';
+      case 'online-enabled-but-off':
+        // 配置说「联机已开」，但 TailScale 没有规则 → 按配置补上（tailnet 内）
+        return 'tailnet';
+      case 'serve-port-mismatch':
+        return 'tailnet'; // 重新 serve 到当前端口
+      default:
+        return '';
+    }
+  }
+
   async fixDrift(x) {
-    const action = x && (x.action || x.fix);
-    if (!action) return;
+    const code = x && x.code;
+    const action = (x && (x.action || x.fix)) || this.driftFixFor(code);
+    if (!action) {
+      this.switchError = '这条漂移没有可选的一键修复，请按提示手动处理。';
+      return this.rerender();
+    }
     if (typeof action === 'string' && ['serve', 'tailnet', 'funnel', 'off'].includes(action)) return this.switchMode(action);
     if (action.type === 'mode') return this.switchMode(String(action.mode || 'tailnet'));
     const r = await req(String(action.url || action.path || ''), {
@@ -562,7 +583,10 @@ export class SettingsPanel {
   }
 
   driftBar(d) {
-    const drift = Array.isArray(d.drift) ? d.drift : [];
+    // 服务端实测形状是 { state, mode, configMode, actualMode, drift:[{code,label,detail,fatal}], port }；
+    // 老/降级实现可能直接给数组。两种都吃，否则漂移永远不显示（曾经就是这样静默失效的）。
+    const raw = d.drift;
+    const drift = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.drift) ? raw.drift : []);
     if (!drift.length) return null;
     return h('div.settings-drift', {},
       h('div.settings-drift-head', {}, icon('warn', 'sm'), h('b', { text: '配置漂移（' + drift.length + '）' })),

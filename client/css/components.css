@@ -573,6 +573,135 @@ input[type="text"], input[type="number"], input:not([type]), textarea {
 .settings-drift-text { flex: 1 1 auto; min-width: 0; color: #ffd59a; font-size: var(--fs-sm); }
 .settings-drift-text b { font-weight: 650; }
 
+/* ============================================================================
+   服务端配置面板（client/js/ui/ConfigPanel.js）+ 大厅「设置」入口
+   类名统一前缀 .config- / .lobby-settings，不改动已有类。
+   ============================================================================ */
+
+/* 大厅首页的显眼设置入口 */
+.lobby-settings-slot { display: flex; align-items: center; }
+.btn.lobby-settings {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: var(--radius-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: var(--fs-sm); font-weight: 600;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.btn.lobby-settings:hover { background: var(--bg-panel-2); border-color: var(--accent-player); transform: translateY(-1px); }
+.btn.lobby-settings:focus-visible { outline: 2px solid var(--accent-player); outline-offset: 2px; }
+.btn.lobby-settings .ico { color: var(--accent-player); }
+.btn.lobby-settings .config-entry-hint { color: var(--text-3); font-family: var(--mono); font-size: var(--fs-xs); }
+.btn.lobby-settings[hidden] { display: none; }
+
+/* 面板骨架 */
+.modal-body .config-tabs { margin-bottom: 10px; }
+.badge.config-dirty {
+  padding: 2px 8px; border-radius: var(--radius-pill);
+  background: rgba(255, 207, 92, .16); color: var(--accent-player);
+  font-size: var(--fs-xs); font-weight: 650;
+}
+.config-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.config-toolbar-left { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; color: var(--text-3); }
+.config-search { flex: 0 0 240px; }
+
+.config-state {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; border-radius: var(--radius-btn);
+  background: var(--bg-panel-2); color: var(--text-2); font-size: var(--fs-sm);
+}
+.config-state-warn { border: 1px solid rgba(255, 181, 71, .38); background: rgba(255, 181, 71, .08); color: #ffd59a; }
+
+.config-flash {
+  display: flex; align-items: center; gap: 8px; margin: 6px 0;
+  padding: 7px 10px; border-radius: var(--radius-btn);
+  font-size: var(--fs-sm);
+  background: rgba(79, 209, 139, .1); color: var(--ok);
+}
+.config-flash.danger { background: rgba(255, 92, 108, .12); color: var(--danger); }
+.config-flash.warn { background: rgba(255, 181, 71, .1); color: var(--warn); }
+.config-flash.info { background: rgba(124, 182, 255, .1); color: var(--info); }
+
+.config-errors { display: grid; gap: 4px; margin: 6px 0; }
+.config-error-row { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--danger); }
+.config-error-row .config-mono { color: var(--danger); }
+
+/* 分组折叠区块 */
+.config-list { display: grid; gap: 8px; max-height: min(58vh, 520px); overflow: auto; padding-right: 4px; }
+.config-group {
+  border: 1px solid var(--line); border-radius: var(--radius-btn);
+  background: var(--bg-panel); overflow: hidden;
+}
+.config-group-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 8px 10px; background: var(--bg-panel-2); border: 0;
+  color: var(--text); font-size: var(--fs-sm); font-weight: 650; cursor: pointer;
+  text-align: left;
+}
+.config-group-head:hover { background: var(--bg-elev); }
+.config-group-head .ico { color: var(--text-3); }
+.config-group-title { letter-spacing: .02em; }
+.config-group-key { color: var(--text-3); font-family: var(--mono); font-size: var(--fs-xs); }
+.config-group-head .spacer { flex: 1 1 auto; }
+.badge.config-ov-badge {
+  padding: 1px 7px; border-radius: var(--radius-pill);
+  background: rgba(255, 207, 92, .16); color: var(--accent-player); font-size: var(--fs-xs);
+}
+.config-group-body { display: grid; gap: 0; }
+.config-group.closed .config-group-head { border-radius: var(--radius-btn); }
+
+/* 单个键的行 */
+.config-row {
+  display: grid; grid-template-columns: 200px minmax(0, 1fr) auto;
+  align-items: center; gap: 10px;
+  padding: 6px 10px; border-top: 1px solid var(--line);
+  font-size: var(--fs-sm);
+}
+.config-row:first-child { border-top: 0; }
+.config-row.override { background: rgba(255, 207, 92, .06); }
+.config-row.override .config-path { color: var(--accent-player); }
+.config-row.dirty { box-shadow: inset 3px 0 0 var(--info); }
+.config-row.invalid { background: rgba(255, 92, 108, .1); }
+.config-path { font-family: var(--mono); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.config-control { min-width: 0; display: flex; align-items: center; gap: 6px; }
+.config-input { width: 100%; max-width: 320px; }
+.config-bool { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); cursor: pointer; }
+.config-check { width: 16px; height: 16px; accent-color: var(--accent-player); }
+.config-meta { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.config-default { color: var(--text-3); font-size: var(--fs-xs); font-family: var(--mono); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn.config-restore { padding: 2px 8px; font-size: var(--fs-xs); }
+.config-json { display: flex; align-items: center; gap: 6px; min-width: 0; width: 100%; }
+.config-json-view { font-family: var(--mono); color: var(--text-2); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.config-json-edit { width: 100%; font-family: var(--mono); font-size: var(--fs-xs); min-height: 60px; }
+.config-mono { font-family: var(--mono); }
+
+/* 分组头：整体不可点，只有左边的 toggle 区可点，右边还要塞「恢复默认」按钮 */
+.config-group-head { display: flex; align-items: center; gap: 8px; padding: 0 6px 0 0; }
+.config-group-toggle {
+  display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0;
+  padding: 7px 10px; border: 0; border-radius: var(--radius-btn); background: transparent;
+  color: var(--text); font-size: var(--fs-sm); font-weight: 650; cursor: pointer; text-align: left;
+}
+.config-group-toggle:hover { background: var(--bg-elev); }
+.config-group-toggle .ico { color: var(--text-3); }
+.btn.config-group-reset { padding: 2px 8px; font-size: var(--fs-xs); white-space: nowrap; }
+
+/* 脱敏行：密码框 + 显示切换 + 一行小字说明 */
+.config-secret-wrap { display: flex; flex-direction: column; gap: 2px; width: 100%; min-width: 0; }
+.config-secret-line { display: flex; align-items: center; gap: 6px; }
+.config-input.config-secret { font-family: var(--mono); letter-spacing: .04em; }
+.config-eye { white-space: nowrap; }
+.config-secret-note { color: var(--text-3); }
+
+@media (max-width: 720px) {
+  .config-row { grid-template-columns: 1fr; gap: 4px; align-items: stretch; }
+  .config-meta { justify-content: flex-start; }
+  .config-search { flex: 1 1 100%; }
+  .config-toolbar { flex-wrap: wrap; }
+}
+
 @media (max-width: 720px) {
   .settings-modes { flex-wrap: wrap; }
   .settings-modes button { flex: 1 1 100%; }

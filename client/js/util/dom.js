@@ -13,20 +13,45 @@ export function h(tag, props = {}, ...children) {
     if (part[0] === '.') el.classList.add(part.slice(1));
     else if (part[0] === '#') el.id = part.slice(1);
   }
-  applyProps(el, props);
-  append(el, children);
+  // 容错：不少人会写成 h('dl', child1, child2) 省略 props 对象。
+  // 旧实现把 child1 当 props 遍历（HTMLElement 没有可枚举自有属性），
+  // 于是它被静静丢弃 —— 表现为「容器里的第一个子节点凭空消失」。
+  // 这里把「不像 props 对象」的第二参数还原成第一个子节点。
+  let p = props;
+  let kids = children;
+  if (p !== null && p !== undefined && !isPropsObject(p)) {
+    kids = [p, ...children];
+    p = {};
+  }
+  applyProps(el, p);
+  append(el, kids);
   return el;
+}
+
+/** 只有「普通对象」才配当 props；Node / 数组 / 字符串 / 数字一律按子节点处理。 */
+function isPropsObject(v) {
+  if (typeof v !== 'object' || v === null) return false;
+  if (typeof Node !== 'undefined' && v instanceof Node) return false;
+  if (Array.isArray(v)) return false;
+  return true;
 }
 
 export function s(tag, props = {}, ...children) {
   const el = document.createElementNS(SVG_NS, tag);
-  for (const [k, v] of Object.entries(props || {})) {
+  // 同 h()：省略 props 时第二参数是子节点，不要当 props 吃掉。
+  let p = props;
+  let kids = children;
+  if (p !== null && p !== undefined && !isPropsObject(p)) {
+    kids = [p, ...children];
+    p = {};
+  }
+  for (const [k, v] of Object.entries(p || {})) {
     if (v === null || v === undefined || v === false) continue;
     if (k === 'class') el.setAttribute('class', v);
     else if (k === 'text') el.textContent = v;
     else el.setAttribute(k, String(v));
   }
-  append(el, children);
+  append(el, kids);
   return el;
 }
 
