@@ -2,7 +2,7 @@
 // 再叠加运行期覆盖 data/override.json（只接受已有键、同类型、通过校验的值）。
 // balance.json / override.json 支持热重载（下一 tick 生效）。
 
-import { existsSync, readFileSync, watchFile, unwatchFile } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, watchFile, unwatchFile, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { dataDir } from './paths.js';
 
@@ -44,7 +44,7 @@ const COST_KEYS = ['price', 'upLevelPrice', 'perUsePrice'];
 /** 价格表达式：非负数字，或只含数字 / Lv / 运算符的字符串（由 ItemSystem.evalCost 求值）。 */
 const costExpr = (v) => nonneg(v) || (typeof v === 'string' && v.trim() !== '' && /^[0-9A-Za-z+\-*/().\s{}]+$/.test(v) && /Lv|\d/.test(v));
 
-const APP_RULES = [
+export const APP_RULES = [
   ['server.port', int(1, 65535)],
   ['tickRate', int(1, 60)],
   ['round.durationMs', pos],
@@ -62,7 +62,7 @@ const APP_RULES = [
   ['online.port', int(1, 65535)],
 ];
 
-const BALANCE_RULES = [
+export const BALANCE_RULES = [
   ['move.baseSpeed', pos],
   ['move.accel', pos],
   ['move.radius', pos],
@@ -131,14 +131,133 @@ export function validateConfig(obj, rules, label) {
   return errors;
 }
 
-function readOverride(rootDir) {
+/**
+ * 读运行期覆盖文件。设置页会直接写它，所以这里必须「坏文件不许变成空对象」：
+ * 解析失败时返回 { __error }，调用方（buildBalance/loadConfig）只记 warn 不覆盖，
+ * 否则一次写坏的文件会让整份配置悄悄回落到默认值。
+ */
+export function readOverride(rootDir) {
   const file = join(dataDir(), 'override.json');
   if (!existsSync(file)) return {};
   try {
-    return readJson(file);
+    const raw = readJson(file);
+    return isPlainObject(raw) ? raw : { __error: 'override.json 顶层必须是对象' };
   } catch (err) {
     return { __error: err.message };
   }
+}
+
+/** 不可枚举的读法：供设置页读「原始覆盖文件」（含 __error 时不掩盖）。 */
+export function readOverrideFile(rootDir) {
+  return readOverride(rootDir);
+}
+
+/**
+ * 原子写 override.json：先写 .tmp 再 rename。
+ * 为什么不用 writeFileSync 直写：进程在写到一半时被杀（安装器、任务管理器）会留下半截 JSON，
+ * 下次启动就被当成「覆盖全部非法」而回退默认值，用户改的设置全丢。rename 在同一分区上是原子的。
+ */
+export function writeOverride(rootDir, next) {
+  const dir = dataDir();
+  const file = join(dir, 'override.json');
+  mkdirSync(dir, { recursive: true });
+  const body = JSON.stringify(isPlainObject(next) ? next : {}, null, 2) + '\n';
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(tmp, body, 'utf8');
+    renameSync(tmp, file);
+  } catch (err) {
+    // 失败要把半成品清掉，否则下次写会不断堆 .tmp
+    try { rmSync(tmp, { force: true }); } catch { /* 忽略 */ }
+    throw err;
+  }
+  return { file, bytes: Buffer.byteLength(body) };
+}
+
+/** 把点路径设进一个对象（中间层不存在就建）。 */
+function setPath(obj, path, value) {
+  const keys = String(path).split('.');
+  let cur = obj;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const k = keys[i];
+    if (!isPlainObject(cur[k])) cur[k] = {};
+    cur = cur[k];
+  }
+  cur[keys[keys.length - 1]] = value;
+  return obj;
+}
+
+/** 删掉点路径上的键，并自下而上清掉变空的父对象（避免 override 里堆 {"flatter":{}} 这种空壳）。 */
+function deletePath(obj, path) {
+  const keys = String(path).split('.');
+  const stack = [];
+  let cur = obj;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const k = keys[i];
+    if (!isPlainObject(cur[k])) return obj;
+    stack.push([cur, k]);
+    cur = cur[k];
+  }
+  delete cur[keys[keys.length - 1]];
+  for (let i = stack.length - 1; i >= 0; i--) {
+    const [parent, k] = stack[i];
+    if (isPlainObject(parent[k]) && Object.keys(parent[k]).length === 0) delete parent[k];
+    else break;
+  }
+  return obj;
+}
+
+/**
+ * 打补丁：{ section, path, value } 或 { section, patch:{点路径:值} }。
+ * value === null 表示「删除该键，恢复继承默认值」（JSON 没有 undefined，null 就是删除语义）。
+ * 只做写入，不做校验——校验是 ConfigAdmin.validateAll 的职责，两者分开才能各自单测。
+ */
+export function patchOverride(rootDir, { section, path, value, patch } = {}) {
+  if (!section) throw new Error('patchOverride 需要 section');
+  const cur = readOverride(rootDir);
+  if (cur.__error) throw new Error(`override.json 已损坏，拒绝在其上打补丁：${cur.__error}`);
+  const next = structuredClone(cur);
+  if (!isPlainObject(next[section])) next[section] = {};
+  const pairs = patch && isPlainObject(patch) ? Object.entries(patch) : [[path, value]];
+  for (const [p, v] of pairs) {
+    if (!p) throw new Error('patchOverride 需要 path');
+    if (v === null) {
+      deletePath(next[section], p);
+      if (Object.keys(next[section]).length === 0) delete next[section];
+    } else {
+      setPath(next[section], p, v);
+    }
+  }
+  writeOverride(rootDir, next);
+  return next;
+}
+
+/** 清空 override：给了 section 只清那一段，否则整个文件重置（写 {} 而不是删文件，方便排错时看现场）。 */
+export function clearOverride(rootDir, section = null) {
+  if (!section) {
+    writeOverride(rootDir, {});
+    return {};
+  }
+  const cur = readOverride(rootDir);
+  const next = cur.__error ? {} : structuredClone(cur);
+  delete next[section];
+  writeOverride(rootDir, next);
+  return next;
+}
+
+/**
+ * 某段「当前生效的完整值」= config 里的默认值深合并 override。
+ * 为什么自己读文件而不复用 loadConfig：设置页要能只改 app 段就立刻预览，不该被 balance/map 的错误挡住；
+ * 返回值直接是值本体（调用方最常用），被拒绝的覆盖路径挂在不可枚举属性上，不干扰 JSON 序列化。
+ */
+export function readSection(rootDir, section) {
+  const baseFile = section === 'balance' ? join(rootDir, 'config', 'balance.json') : section === 'llm' ? join(rootDir, 'config', 'llm.json') : join(rootDir, 'config', 'default.json');
+  const base = readJson(baseFile);
+  const ov = readOverride(rootDir);
+  if (ov.__error) throw new Error(`override.json 解析失败：${ov.__error}`);
+  const [merged, rejected] = mergeOverride(base, ov[section] ?? {}, section);
+  Object.defineProperty(merged, '__rejected', { value: rejected, enumerable: false });
+  return merged;
 }
 
 function buildBalance(rootDir, logger) {

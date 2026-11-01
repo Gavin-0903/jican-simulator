@@ -17,6 +17,7 @@ import { WsServer } from './net/WsServer.js';
 import { loadOrCreateIdKey } from './net/IdKey.js';
 import { RoomManager } from './net/RoomManager.js';
 import { createLobbyRouter } from './net/LobbyHttp.js';
+import { createConfigAdmin } from './net/ConfigAdmin.js';
 import { applySetup, readSettings, writeSettings } from './persistence/AppSettings.js';
 import { enableServerSource, readOnlineConfig, writeOnlineConfig } from './persistence/OnlineConfig.js';
 import { dataDir } from './persistence/paths.js';
@@ -199,6 +200,22 @@ export async function startServer(opts = {}) {
       drift,
     };
   };
+  // 服务端配置读写（v0.6）：写盘成功后立刻把新 balance 推给 controller（下一 tick 生效），
+  // 这样设置页改完不用重启就能看到手感变化；app 段里要重启才生效的键由 needRestart 提示。
+  const configAdmin = createConfigAdmin({
+    rootDir,
+    onApply: () => {
+      // 先再装载一次（以磁盘为准，避免两次点击之间被手改），成功后整套热替换：
+      // balance 推给 controller 保下一 tick 生效，app/llm 原地覆盖以保住引用（别处已持有 config 对象）。
+      const next = loadConfig(rootDir, { logger });
+      controller.setBalance(next.balance);
+      Object.assign(config.app, next.app);
+      Object.assign(config.llm, next.llm);
+      // config.balance 也被别的模块持有（落盘、ws 下行），就地覆盖而不是换引用
+      if (config.balance && typeof config.balance === 'object') for (const k of Object.keys(config.balance)) delete config.balance[k];
+      if (config.balance && typeof config.balance === 'object') Object.assign(config.balance, next.balance);
+    },
+  });
   const lobbyRouter = createLobbyRouter({
     rooms,
     idKey: idKey.key,
@@ -226,6 +243,7 @@ export async function startServer(opts = {}) {
     // 桌面宿主（v0.4）：/api/app/ping 回显版本与端口，/api/app/quit 交给下面的 shutdown 通道。
     appInfo: () => ({ version: config.app?.version ?? '', uptime: Math.round(process.uptime()) }),
     requestQuit: () => requestShutdown?.('launcher'),
+    configAdmin,
   });
   const stopWatch = watch ? watchBalance(rootDir, (b) => controller.setBalance(b), { logger }) : () => {};
 

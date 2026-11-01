@@ -61,9 +61,40 @@ export function createLobbyRouter({
   // 只实现这两个控制端点，别的什么都不暴露；quit 还要求请求来自回环地址 + launcher 标记头。
   appInfo = null,
   requestQuit = null,
+  // 服务端配置读写（v0.6）：configAdmin 由 server/index.js 组装（校验 + 落盘 + 热生效 + 推送 balance），
+  // 本模块只负责路由与错误码映射。接口形状：describe() → GET 响应体，apply(body)/reset(body) → { ok, ... }。
+  configAdmin = null,
 }) {
   const isLoopback = (addr) => addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
   const MANAGE_DENIED = '只允许本机设置页修改联机配置';
+
+  /**
+   * 读 JSON 请求体（带体积上限）：超限直接掐连接，避免有人拿超大 body 把设置页进程撑爆。
+   * 为什么单独抽出来：配置接口有 GET/POST/reset 三处都要读体，而现有接口各自内联一份读体代码。
+   */
+  const readJsonBody = (req, limit, onDone) => {
+    let body = '';
+    let aborted = false;
+    req.on('data', (c) => {
+      body += c;
+      if (body.length > limit) {
+        aborted = true;
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      if (aborted) return;
+      let parsed;
+      try {
+        parsed = JSON.parse(body || '{}');
+      } catch {
+        return onDone({ ok: false, error: 'bad json' });
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return onDone({ ok: false, error: '请求体必须是 JSON 对象' });
+      onDone({ ok: true, body: parsed });
+    });
+    req.on('error', () => { aborted = true; });
+  };
 
   /** 事实源：优先用注入的 tailscaleFacts()（index.js 里带 1.5s 缓存），没有就现场读一遍。 */
   const factsSource = async () => {
@@ -404,9 +435,53 @@ export function createLobbyRouter({
       send(res, 200, { ok: true, room: view, created: Boolean(out.created), wsPath: `/ws?roomid=${view.id}&token=${view.token}` });
       return true;
     }
+    // ── 服务端配置读写（v0.6 设置页「服务端配置」）──────────────────────────────
+    // 读写 config/*.json 与 data/override.json。全部只对本机开放：这些接口能改内存与磁盘上的玩法参数，
+    // 暴露到局域网等于把服务器交给别人调参。未注入 configAdmin 时统一 501（前端据此禁用整块 UI）。
+    if (path === '/api/config' || path.startsWith('/api/config/')) {
+      if (!isLocalManageRequest(req)) {
+        send(res, 403, { ok: false, error: MANAGE_DENIED });
+        return true;
+      }
+      if (!configAdmin) {
+        send(res, 501, { ok: false, error: '本实例未启用配置读写接口' });
+        return true;
+      }
+      if (path === '/api/config' && (req.method === 'GET' || req.method === 'HEAD')) {
+        send(res, 200, configAdmin.describe());
+        return true;
+      }
+      if (path === '/api/config' && req.method === 'POST') {
+        readJsonBody(req, 64 * 1024, (parsed) => {
+          if (!parsed.ok) return send(res, 400, { ok: false, errors: [{ path: '', message: parsed.error }] });
+          let out;
+          try {
+            out = configAdmin.apply(parsed.body);
+          } catch (err) {
+            return send(res, 500, { ok: false, errors: [{ path: '', message: String(err && err.message ? err.message : err) }] });
+          }
+          send(res, out.ok ? 200 : 400, out);
+        });
+        return true;
+      }
+      if (path === '/api/config/reset' && req.method === 'POST') {
+        readJsonBody(req, 4096, (parsed) => {
+          if (!parsed.ok) return send(res, 400, { ok: false, errors: [{ path: '', message: parsed.error }] });
+          let out;
+          try {
+            out = configAdmin.reset(parsed.body ?? {});
+          } catch (err) {
+            return send(res, 500, { ok: false, errors: [{ path: '', message: String(err && err.message ? err.message : err) }] });
+          }
+          send(res, out.ok ? 200 : 400, out);
+        });
+        return true;
+      }
+      send(res, 405, { ok: false, error: '只接受 GET /api/config、POST /api/config、POST /api/config/reset' });
+      return true;
+    }
     return false;
   };
-
   // 对外入口：同步返回布尔值（true = 本模块已接管），所以不能写成 async 函数。
   // 认得的路径才算「归我管」，未注册的路径一律 false 交回上层（主机壳要靠这个挂 /api/local/*）。
   return (req, res) => {
