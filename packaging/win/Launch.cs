@@ -12,6 +12,8 @@
 //     │     └─ spawn(jican-simulator.exe --serve)   ← 真正的服务端，无窗口常驻
 //     ├─ 轮询 %LOCALAPPDATA%\JicanSimulator\server.port 取端口，再 GET /api/app/ping 确认是我们的服务
 //     ├─ MainForm：内嵌 WebView2 占满客户区（关闭 = 收进托盘，服务继续跑）
+//     ├─ RoomForm：页面 window.open 出来的每个本机地址 → 一个**独立房间窗口**（各自一个 WebView2），
+//     │            递归：房间窗口里再 window.open 本机地址又开一个新的 RoomForm；关掉宿主时一并关掉。
 //     └─ NotifyIcon：左键单击显示/隐藏；右键菜单 = 显示主界面 / 在浏览器打开 / 查看日志 / 重启服务 / 退出
 //
 // 为什么不用 Electron（DSH 的方案）：Electron 自带 Chromium 会让包体从 90 MB 涨到 340 MB；
@@ -24,6 +26,14 @@
 //   3) CreateProcess 不能传自定义 lpEnvironment —— 某些宿主（DSH 作业沙箱）里直接
 //      ERROR_INVALID_PARAMETER(87)。主程序路径改由运行时目录的 launcher.cfg 传下去；
 //   4) lpCommandLine 必须 StringBuilder 且容量够，用 string 也是 87。
+//
+// 关于「加入 WebKit」（明确结论，别再来问一遍）：
+//   本项目桌面宿主用的是 **WebView2 = Chromium/Edge**，**不是 WebKit**，也不需要 WebKit。
+//   Windows 上现成可用的内嵌 WebKit 只有 QtWebKit（早已停更，拖进 100 MB+ Qt 运行时）或
+//   wkwebview（macOS 专用），在 Windows 上都不现实；把 Chromium 内嵌进去要 340 MB（Electron 方案，
+//   已在 v0.4 明确否掉）。WebView2 与现代 WebKit 的页面能力等价：window.open、WebSocket、
+//   fetch、Promise、ES2020 全都原生支持，页面侧**不需要任何 polyfill**。
+//   联机页面里 window.open(url) 出来的本机地址，由本文件的 RoomForm 变成独立窗口显示。
 
 using System;
 using System.Collections.Generic;
@@ -570,25 +580,23 @@ internal sealed class AppHost : Form
 
     private void InitWebView()
     {
-        string loader = Path.Combine(_exeDir, "runtimes", "win-x64", "native", "WebView2Loader.dll");
-        if (!File.Exists(loader)) loader = Path.Combine(_exeDir, "WebView2Loader.dll");
-        if (File.Exists(loader)) Native.SetDllDirectory(Path.GetDirectoryName(loader));
-
-        string udf = Path.Combine(Program.DataDir(), "webview2");
-        Directory.CreateDirectory(udf);
-        Program.HostLog("InitWebView: exeDir=" + _exeDir + " loader=" + (File.Exists(loader) ? loader : "(未找到)") + " udf=" + udf);
-
-        // 进程内可执行文件目录：WebView2Loader.dll 若与 exe 同目录，光 SetDllDirectory 不够可靠
-        // （宿主可能从别的 cwd 启动），补一条 PATH。
-        string path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-        if (!path.Contains(_exeDir)) Environment.SetEnvironmentVariable("PATH", _exeDir + ";" + path);
-
-        var env = CoreWebView2Environment.CreateAsync(null, udf, null).GetAwaiter().GetResult();
+        CoreWebView2Environment env;
+        try
+        {
+            env = WebView2Setup.Environment();
+        }
+        catch (Exception ex)
+        {
+            Program.HostLog("WebView2 环境创建失败：" + ex);
+            FallbackToBrowser(ex);
+            return;
+        }
         _web = new WebView2();
         _web.Dock = DockStyle.Fill;
         _web.DefaultBackgroundColor = Color.FromArgb(18, 20, 24);
         Controls.Add(_web);
-        _web.BringToFront();
+        // 让 WebView 显示在最上层，但焦点仍交给 WebView（_splash 是 Label，不会抢焦点）
+        Controls.SetChildIndex(_web, 0);
         _splash.Visible = false;
 
         _web.CoreWebView2InitializationCompleted += delegate(object s, CoreWebView2InitializationCompletedEventArgs ev)
@@ -613,10 +621,13 @@ internal sealed class AppHost : Form
                     OpenExternal(a2.Uri);
                 }
             };
+            // 页面 window.open(url)（「创建房间 / 进入房间成功」时就是它）→ 开独立的房间窗口。
+            // v0.5 之前这里是 core.Navigate(uri)：本地地址被塞进同一个控件，主窗口页面直接被顶掉，
+            // 玩家从房间里退不出来，只能重启宿主。现在本机地址一律给一个自己的 RoomForm。
             core.NewWindowRequested += delegate(object s2, CoreWebView2NewWindowRequestedEventArgs a2)
             {
                 a2.Handled = true;
-                if (IsLocal(a2.Uri)) core.Navigate(a2.Uri); else OpenExternal(a2.Uri);
+                if (IsLocal(a2.Uri)) OpenRoomWindow(a2.Uri); else OpenExternal(a2.Uri);
             };
             core.DocumentTitleChanged += delegate { SyncTitle(); };
             core.NavigationCompleted += delegate(object s3, CoreWebView2NavigationCompletedEventArgs a3)
@@ -629,11 +640,20 @@ internal sealed class AppHost : Form
         _web.EnsureCoreWebView2Async(env);
     }
 
-    private static bool IsLocal(string uri)
+    /// <summary>
+    /// 只有**本机自己那个服务**的地址才允许留在内嵌 WebView 里；跨机地址（含 ts.net 的 https://xxx.ts.net/…，
+    /// 联机对端）一律交给系统浏览器，宿主不替第三方站点当浏览器。
+    /// 刻意不认 https://——认了就等于把任意外站放进宿主进程。
+    /// </summary>
+    internal static bool IsLocal(string uri)
     {
         if (string.IsNullOrEmpty(uri)) return false;
+        // about:blank 是 window.open() 不带参数时的「继承者」占位地址，必须留在内嵌侧，
+        // 否则页面先 open 再写 document 的老写法会被拦。
+        if (string.Equals(uri, "about:blank", StringComparison.OrdinalIgnoreCase)) return true;
         return uri.StartsWith("http://127.0.0.1:", StringComparison.OrdinalIgnoreCase)
             || uri.StartsWith("http://localhost:", StringComparison.OrdinalIgnoreCase)
+            || uri.StartsWith("http://[::1]:", StringComparison.OrdinalIgnoreCase)
             || uri.StartsWith("about:", StringComparison.OrdinalIgnoreCase)
             || uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
             || uri.StartsWith("ws://127.0.0.1:", StringComparison.OrdinalIgnoreCase);
@@ -681,6 +701,29 @@ internal sealed class AppHost : Form
         BringToFront();
     }
 
+    /// <summary>
+    /// 弹一个独立的房间窗口。页面 window.open 出来的本机地址都走这里（主窗口与房间窗口共用）。
+    /// 同步 new + Show：不丢用户手势链，弹窗不被浏览器拦截，调用方也不用管 async。
+    /// </summary>
+    private void OpenRoomWindow(string uri)
+    {
+        if (!IsLocal(uri))
+        {
+            OpenExternal(uri);
+            return;
+        }
+        try
+        {
+            RoomForm.Open(uri, _debug, false);
+        }
+        catch (Exception ex)
+        {
+            Program.HostLog("OpenRoomWindow 失败：" + ex);
+            // 房间窗口自己起不来的兜底：至少让玩家用系统浏览器进去，别把人卡在大厅
+            OpenExternal(uri);
+        }
+    }
+
     private void OpenInBrowser()
     {
         try { Process.Start(new ProcessStartInfo(_url) { UseShellExecute = true }); }
@@ -717,6 +760,8 @@ internal sealed class AppHost : Form
     private void ExitApp(bool skipQuit)
     {
         _reallyExit = true;
+        // 退出前把房间窗口一起收掉，否则 Disposing 的 WebView2 会拖着进程不结束
+        RoomForm.CloseAll();
         if (!skipQuit)
         {
             try
@@ -766,6 +811,254 @@ internal sealed class AppHost : Form
     protected override void Dispose(bool disposing)
     {
         if (disposing) DestroyTray();
+        base.Dispose(disposing);
+    }
+}
+
+// ======================================================================
+// WebView2 运行时装配（主窗口与房间窗口共用同一份 Environment / user data folder）
+// ======================================================================
+
+/// <summary>
+/// WebView2 的进程级装配集中在这里，原因（踩过的坑）：
+///   1) 同一个进程里所有 WebView2 控件**必须**共用一个 user data folder（UDF），各开各的
+///      会直接 0x8007139F「已经有一个同路径的 Environment 在用」之类的 HRESULT；
+///   2) 托管层 Microsoft.Web.WebView2.Core.dll 是随 exe 平铺的，CLR 按「应用基目录 + PATH」找它，
+///      WebView2Loader.dll（原生）还得靠 SetDllDirectory + PATH 兜；这套逻辑只写一遍；
+///   3) CreateAsync 是 async，GetAwaiter().GetResult() 在 UI 线程上不能嵌套多次 —— 缓存在静态字段里
+///      之后，房间窗口同步构造也能直接拿到，不会在 OnShown 里死等。
+/// </summary>
+internal static class WebView2Setup
+{
+    private static readonly object Gate = new object();
+    private static CoreWebView2Environment _env;
+
+    /// <summary>UDF：所有 WebView2 共用 &lt;数据目录&gt;webview2（Cookie / localStorage / 登录态也共用）。</summary>
+    internal static string UserDataFolder()
+    {
+        string udf = Path.Combine(Program.DataDir(), "webview2");
+        Directory.CreateDirectory(udf);
+        return udf;
+    }
+
+    internal static CoreWebView2Environment Environment()
+    {
+        if (_env != null) return _env;
+        lock (Gate)
+        {
+            if (_env != null) return _env;
+            string exeDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            string loader = Path.Combine(exeDir, "runtimes", "win-x64", "native", "WebView2Loader.dll");
+            if (!File.Exists(loader)) loader = Path.Combine(exeDir, "WebView2Loader.dll");
+            if (File.Exists(loader)) Native.SetDllDirectory(Path.GetDirectoryName(loader));
+
+            // 进程内可执行文件目录：WebView2Loader.dll 若与 exe 同目录，光 SetDllDirectory 不够可靠
+            // （宿主可能从别的 cwd 启动），补一条 PATH。
+            string path = System.Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            if (!path.Contains(exeDir)) System.Environment.SetEnvironmentVariable("PATH", exeDir + ";" + path);
+
+            string udf = UserDataFolder();
+            Program.HostLog("WebView2Setup: exeDir=" + exeDir + " loader=" + (File.Exists(loader) ? loader : "(未找到)") + " udf=" + udf);
+            _env = CoreWebView2Environment.CreateAsync(null, udf, null).GetAwaiter().GetResult();
+            return _env;
+        }
+    }
+}
+
+// ======================================================================
+// RoomForm：房间窗口（页面 window.open 出来的本机地址 → 独立窗口，自己的 WebView2）
+//
+// 「加入 WebKit」的落地说明：没有 WebKit，也不需要。WebView2 = Chromium/Edge，
+// 与 WebKit 在页面能力上等价（window.open / WebSocket / fetch 全支持），Windows 上
+// 现成的 WebKit 要么停更（QtWebKit）要么平台不对（WKWebView 仅 macOS）。
+// 所以「用 WebView 等方式把联机网页显示到窗口上」这件事，本类就是最终形态。
+// ======================================================================
+internal sealed class RoomForm : Form
+{
+    /// <summary>所有还活着的房间窗口。主窗口退出一并关掉；关掉宿主时靠它兜底。</summary>
+    private static readonly List<RoomForm> _rooms = new List<RoomForm>();
+
+    private readonly bool _debug;
+    private readonly string _target;
+    private WebView2 _web;
+    private Label _splash;
+
+    internal RoomForm(string url, bool debug, bool cascade)
+    {
+        _debug = debug;
+        _target = url;
+
+        // 级联偏移：同一位置叠 N 个窗口玩家会以为「没反应」，每个新窗口往右下错开 28px。
+        Point spot = Screen.PrimaryScreen.WorkingArea.Location;
+        if (cascade)
+        {
+            int n;
+            lock (_rooms) n = _rooms.Count;
+            spot = new Point(spot.X + 40 + (n % 8) * 28, spot.Y + 40 + (n % 8) * 28);
+        }
+
+        Text = "机惨模拟器 — 房间";
+        ClientSize = new Size(1200, 760);
+        MinimumSize = new Size(800, 560);
+        StartPosition = cascade ? FormStartPosition.Manual : FormStartPosition.CenterScreen;
+        if (cascade) Location = spot;
+        BackColor = Color.FromArgb(18, 20, 24);
+        Font = new Font("Microsoft YaHei UI", 9f);
+        try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+    }
+
+    /// <summary>打开一个房间窗口（主窗口 / 房间窗口都调这个）。</summary>
+    internal static RoomForm Open(string url, bool debug, bool cascade)
+    {
+        var f = new RoomForm(url, debug, cascade);
+        lock (_rooms) _rooms.Add(f);
+        f.FormClosed += delegate { lock (_rooms) _rooms.Remove(f); };
+        f.Show();
+        f.Start();
+        return f;
+    }
+
+    internal static int Count
+    {
+        get { lock (_rooms) return _rooms.Count; }
+    }
+
+    internal static void CloseAll()
+    {
+        RoomForm[] all;
+        lock (_rooms) { all = _rooms.ToArray(); _rooms.Clear(); }
+        foreach (RoomForm f in all)
+        {
+            try { f.Close(); } catch { }
+        }
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        // Start 也可能被外部提前调（Open 里调用），这里只做一次初始化。
+        Start();
+    }
+
+    private bool _started;
+    private void Start()
+    {
+        if (_started) return;
+        _started = true;
+        Program.HostLog("RoomForm 打开：" + _target);
+
+        _splash = new Label();
+        _splash.Text = "正在打开房间…";
+        _splash.Dock = DockStyle.Fill;
+        _splash.TextAlign = ContentAlignment.MiddleCenter;
+        _splash.ForeColor = Color.FromArgb(200, 205, 215);
+        _splash.Font = new Font("Microsoft YaHei UI", 11f);
+        Controls.Add(_splash);
+
+        try
+        {
+            var env = WebView2Setup.Environment();
+            _web = new WebView2();
+            _web.Dock = DockStyle.Fill;
+            _web.DefaultBackgroundColor = Color.FromArgb(18, 20, 24);
+            _web.CoreWebView2InitializationCompleted += OnInitDone;
+            _web.EnsureCoreWebView2Async(env);
+        }
+        catch (Exception ex)
+        {
+            Program.HostLog("RoomForm 初始化失败：" + ex);
+            ShowFallback(ex);
+        }
+    }
+
+    private void OnInitDone(object sender, CoreWebView2InitializationCompletedEventArgs ev)
+    {
+        Program.HostLog("RoomForm CoreWebView2 初始化完成，IsSuccess=" + ev.IsSuccess);
+        if (!ev.IsSuccess)
+        {
+            ShowFallback(ev.InitializationException ?? new Exception("WebView2 初始化失败"));
+            return;
+        }
+
+        Controls.Add(_web);
+        Controls.SetChildIndex(_web, 0);
+        if (_splash != null) _splash.Visible = false;
+
+        var core = _web.CoreWebView2;
+        core.Settings.AreDevToolsEnabled = _debug;
+        core.Settings.AreDefaultContextMenusEnabled = _debug;
+        core.Settings.IsStatusBarEnabled = false;
+        core.Settings.IsZoomControlEnabled = true;
+
+        // 与主窗口一致：外链一律交给系统浏览器，绝不在房间窗口里访问非本机地址
+        core.NavigationStarting += delegate(object s, CoreWebView2NavigationStartingEventArgs a)
+        {
+            if (!AppHost.IsLocal(a.Uri))
+            {
+                a.Cancel = true;
+                OpenExternal(a.Uri);
+            }
+        };
+
+        // 房间窗口里再次 window.open（比如房间内「再开一个房间」）：
+        // **再开一个新的 RoomForm**，绝不把当前控件导航走 —— 这正是 v0.5 之前主窗口的 bug。
+        core.NewWindowRequested += delegate(object s, CoreWebView2NewWindowRequestedEventArgs a)
+        {
+            a.Handled = true;
+            if (AppHost.IsLocal(a.Uri)) OpenCascade(a.Uri); else OpenExternal(a.Uri);
+        };
+
+        core.DocumentTitleChanged += delegate { SyncTitle(); };
+        core.NavigationCompleted += delegate(object s, CoreWebView2NavigationCompletedEventArgs a)
+        {
+            Program.HostLog("RoomForm 导航完成 IsSuccess=" + a.IsSuccess + " 状态=" + a.WebErrorStatus + " uri=" + _target);
+        };
+
+        core.Navigate(_target);
+    }
+
+    private void OpenCascade(string uri)
+    {
+        try { Open(uri, _debug, true); }
+        catch (Exception ex) { Program.HostLog("RoomForm 级联开窗失败：" + ex); }
+    }
+
+    private void SyncTitle()
+    {
+        string t = null;
+        try { t = _web.CoreWebView2.DocumentTitle; } catch { }
+        if (string.IsNullOrEmpty(t)) return;
+        Text = "机惨模拟器 — 房间：" + t;
+    }
+
+    private static void OpenExternal(string uri)
+    {
+        try { Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true }); } catch { }
+    }
+
+    private void ShowFallback(Exception ex)
+    {
+        if (_splash == null)
+        {
+            _splash = new Label();
+            _splash.Dock = DockStyle.Fill;
+            _splash.TextAlign = ContentAlignment.MiddleCenter;
+            _splash.ForeColor = Color.FromArgb(200, 205, 215);
+            Controls.Add(_splash);
+        }
+        _splash.Text = "内嵌浏览器不可用（" + ex.Message + "）" + Environment.NewLine
+            + "已用系统默认浏览器打开这个房间。";
+        _splash.Visible = true;
+        try { Process.Start(new ProcessStartInfo(_target) { UseShellExecute = true }); } catch { }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            // WebView2 必须显式 Dispose，否则宿主进程会一直挂着浏览器子进程不退
+            try { if (_web != null) { Controls.Remove(_web); _web.Dispose(); _web = null; } } catch { }
+        }
         base.Dispose(disposing);
     }
 }

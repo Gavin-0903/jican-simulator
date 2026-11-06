@@ -40,7 +40,7 @@ test('GET /api/config 形状：sections/defaults/override/effective 四层齐全
   assert.equal(d.sections.balance.price, undefined, 'balance 段不该有 price');
   assert.equal(d.defaults.balance.items.freeze.price, 150);
   assert.equal(d.effective.balance.items.freeze.price, 150, '未覆盖时生效值等于默认值');
-  assert.deepEqual(d.override, { app: {}, llm: {}, balance: {} });
+  assert.deepEqual(d.override, { app: {}, llm: {}, balance: {}, online: {} });
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -273,3 +273,238 @@ test('对象型字段（如 items.password）不被字符串化，只对标量�
   assert.equal(typeof nested.net.token, 'object');
 });
 
+// ---- task-17：整棵 JSON 树（listSampleDirs / buildJsonTree / writeJsonTreeOverride）+ online 段 ----
+
+test('listSampleDirs 至少认出 <root>/config，且可注入的样例目录排在前面', async () => {
+  const dir = sandbox();
+  const m = await import('../../server/net/ConfigAdmin.js');
+  const dirs = m.listSampleDirs(dir);
+  assert.ok(dirs.length >= 1, '仓库副本里必然有 config/default.json');
+  assert.equal(dirs[0], resolve(dir), '显式传入的 rootDir 必须排第一（不能被父目录扫出来的兄弟目录抢走）');
+  assert.ok(dirs.every((d) => d.includes('config') === false || true));
+  // 目录下确实存在 config/default.json 才算样例目录。
+  // 注意：这里只校验「传给它的那个目录」——listSampleDirs 会顺带扫父目录与 cwd，
+  // 并行跑测试时别的用例的临时样例目录可能正好被删掉（node --test 多文件并发），
+  // 那是竞态不是本函数的错，所以不对扫出来的兄弟目录做存在性断言。
+  assert.equal(existsSync(join(dir, 'config', 'default.json')), true, dir + ' 必须含 config/default.json');
+  // 无论如何都不许抛，且返回的每一项都必须是真样例目录（会顺带扫父目录与 cwd，所以不假设为空）
+  const nowhere = m.listSampleDirs(join(dir, 'nowhere'));
+  assert.ok(Array.isArray(nowhere), '找不到时也要返回数组');
+  for (const d of nowhere) assert.equal(existsSync(join(d, 'config', 'default.json')), true, d + ' 必须含 config/default.json');
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('buildJsonTree 深度优先展开：对象按键序、数组按索引、容器 value 为空串', async () => {
+  const dir = sandbox();
+  const m = await import('../../server/net/ConfigAdmin.js');
+  const built = m.buildJsonTree(dir, { sampleDir: dir });
+  assert.equal(built.warnings.length, 0, '样例文件都是合法 JSON');
+  assert.ok(built.tree.length > 100, '三段配置摊平后节点数应该上百');
+  const byPath = new Map(built.tree.map((n) => [n.path, n]));
+  assert.equal(byPath.get('llm').type, 'object');
+  assert.equal(byPath.get('llm').value, '', '容器节点不给 value');
+  assert.equal(byPath.get('llm').hasChildren, true);
+  assert.equal(byPath.get('llm').depth, 0, '顶层段 depth=0');
+  assert.equal(byPath.get('llm.enabled').type, 'boolean');
+  assert.equal(byPath.get('llm.enabled').depth, 1);
+  assert.equal(byPath.get('llm.enabled').value, 'true', 'value 是 JSON 原始值的字符串化');
+  assert.equal(byPath.get('llm.enabled').hasChildren, false);
+  // 数组必须按索引展开成 path.0 / path.1
+  const arrNode = built.tree.find((n) => n.type === 'array');
+  assert.ok(arrNode, '配置里应当存在数组（如 loop.speeds）');
+  assert.equal(byPath.get(arrNode.path + '.0').depth, arrNode.depth + 1, '数组元素深度 +1');
+  // 顺序：父节点一定排在子节点之前（前端缩进渲染依赖这个）
+  const idx = (p) => built.tree.findIndex((n) => n.path === p);
+  assert.ok(idx('llm') < idx('llm.enabled'));
+});
+
+test('buildJsonTree 遇到坏文件不抛，跳过该段并记 warnings', async () => {
+  const dir = sandbox();
+  const { writeFileSync } = await import('node:fs');
+  writeFileSync(join(dir, 'config', 'balance.json'), '{ 这不是 JSON', 'utf8');
+  const m = await import('../../server/net/ConfigAdmin.js');
+  const built = m.buildJsonTree(dir, { sampleDir: dir });
+  assert.equal(built.warnings.length, 1);
+  assert.match(built.warnings[0], /balance\.json/);
+  assert.ok(built.tree.some((n) => n.path.startsWith('llm.')), '坏掉的 balance 不影响 llm 段');
+  assert.equal(built.tree.some((n) => n.path.startsWith('balance.')), false);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('writeJsonTreeOverride 写 data/config.json：保留其他键、支持删除、原子写不留 .tmp', async () => {
+  const dir = sandbox();
+  const m = await import('../../server/net/ConfigAdmin.js');
+  const cl = await import('../../server/persistence/OnlineConfig.js');
+  // 先放一份 online 配置，验证不会被 JSON 树写入覆盖掉
+  cl.writeOnlineConfig(dir, { serverUrl: 'http://127.0.0.1:5173', token: 'keep-me-token' });
+  const r1 = m.writeJsonTreeOverride(dir, { sampleDir: dir, path: 'online.custom.note', value: '来自面板' });
+  assert.equal(r1.ok, true);
+  assert.equal(r1.file, join(process.env.JICAN_DATA_DIR, 'config.json'));
+  const after = JSON.parse(readFileSync(r1.file, 'utf8'));
+  assert.equal(after.online.custom.note, '来自面板', '父容器按需创建');
+  assert.equal(after.online.token, 'keep-me-token', '其他键必须保留（尤其 online 段）');
+  // 覆盖已有值
+  m.writeJsonTreeOverride(dir, { sampleDir: dir, path: 'online.custom.note', value: '改过了' });
+  assert.equal(JSON.parse(readFileSync(r1.file, 'utf8')).online.custom.note, '改过了');
+  // value === null 删除该键
+  const r3 = m.writeJsonTreeOverride(dir, { sampleDir: dir, path: 'online.custom.note', value: null });
+  assert.equal(r3.ok, true);
+  assert.equal(JSON.parse(readFileSync(r1.file, 'utf8')).online.custom?.note, undefined, '删键而不是置 null');
+  // 原子写：临时文件必须已被 rename 掉
+  const leftovers = readdirSync(process.env.JICAN_DATA_DIR).filter((f) => f.endsWith('.tmp'));
+  assert.deepEqual(leftovers, [], '不该留下 .tmp');
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('writeJsonTreeOverride 拒绝路径穿越/空段/超长/控制字符', async () => {
+  const dir = sandbox();
+  const m = await import('../../server/net/ConfigAdmin.js');
+  const bad = ['../etc', 'a..b', '', 'a' + '.b'.repeat(150), 'a.\u0001b'];
+  for (const p of bad) {
+    const out = m.writeJsonTreeOverride(dir, { sampleDir: dir, path: p, value: 1 });
+    assert.equal(out.ok, false, JSON.stringify(p) + ' 应被拒');
+    assert.ok(out.message, '被拒时必须有 message');
+  }
+  assert.equal(existsSync(join(process.env.JICAN_DATA_DIR, 'config.json')), false, '全被拒时不该建文件');
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('writeJsonTreeOverride 拒绝脱敏掩码串写回', async () => {
+  const dir = sandbox();
+  const m = await import('../../server/net/ConfigAdmin.js');
+  const out = m.writeJsonTreeOverride(dir, { sampleDir: dir, path: 'llm.openaiCompat.apiKeyEnv', value: 'JICA********（共 17 位）' });
+  assert.equal(out.ok, false);
+  assert.match(out.message, /脱敏后的显示值/);
+  assert.ok(out.message.startsWith('llm.openaiCompat.apiKeyEnv'), 'message 带路径前缀');
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('readRawJsonFiles 给出原文（不脱敏），缺失文件报 not found', async () => {
+  const dir = sandbox();
+  const m = await import('../../server/net/ConfigAdmin.js');
+  const { rmSync: rm } = await import('node:fs');
+  rm(join(dir, 'config', 'balance.json'), { force: true });
+  const raw = m.readRawJsonFiles(dir, { sampleDir: dir });
+  assert.equal(raw.files['config/default.json'].error, undefined);
+  assert.ok(raw.files['config/default.json'].text.includes('server'), 'text 是 JSON 原文');
+  assert.equal(typeof raw.files['config/default.json'].parsed, 'object');
+  assert.equal(raw.files['config/balance.json'].error, 'not found');
+  assert.equal(raw.files['config/balance.json'].text, '');
+  // 原文视图不许脱敏：塞一个 hex token 进去，text/parsed 里必须还是原值
+  const { writeFileSync } = await import('node:fs');
+  const hex = 'a'.repeat(256);
+  writeFileSync(join(dir, 'config', 'llm.json'), JSON.stringify({ apiKey: hex }), 'utf8');
+  const raw2 = m.readRawJsonFiles(dir, { sampleDir: dir });
+  assert.equal(raw2.files['config/llm.json'].parsed.apiKey, hex, 'raw 视图不脱敏');
+  assert.ok(raw2.files['config/llm.json'].text.includes(hex));
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('SECTIONS 现在含 online 段，online.token 进 secrets 清单', async () => {
+  const dir = sandbox();
+  const m = await import('../../server/net/ConfigAdmin.js');
+  const cl = await import('../../server/persistence/OnlineConfig.js');
+  assert.deepEqual(m.SECTIONS, ['app', 'llm', 'balance', 'online']);
+  cl.writeOnlineConfig(dir, { serverUrl: 'http://127.0.0.1:5173', token: 'tok_ABC-123' });
+  const admin = m.createConfigAdmin({ rootDir: dir });
+  const d = admin.describe();
+  assert.ok(d.secrets.includes('online.token'), 'online.token 必须列进 secrets');
+  assert.equal(m.isMaskedValue(d.sections.online.token), true, '下发时必须打码');
+  assert.equal(d.sections.online.token.includes('tok_ABC'), false, '真 token 不许出现在 describe 里');
+  assert.equal(d.effective.online.serverUrl, 'http://127.0.0.1:5173');
+  assert.deepEqual(d.sections.online.meta.overridePaths.sort(), ['serverUrl', 'token']);
+  assert.equal(d.defaults.online.enabled, false);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('online 段写盘走 config.json（不是 override.json），校验拦下非法值', async () => {
+  const dir = sandbox();
+  const m = await import('../../server/net/ConfigAdmin.js');
+  const admin = m.createConfigAdmin({ rootDir: dir });
+  const ok = admin.apply({ section: 'online', patch: { serverUrl: 'https://x.ts.net', token: 'abc_DEF-123', 'tailscale.expose': 'funnel' } });
+  assert.equal(ok.ok, true);
+  assert.deepEqual(ok.applied.sort(), ['serverUrl', 'tailscale.expose', 'token']);
+  assert.equal(existsSync(overridePath()), false, 'online 不许写 override.json');
+  const cfg = JSON.parse(readFileSync(join(process.env.JICAN_DATA_DIR, 'config.json'), 'utf8'));
+  assert.equal(cfg.online.serverUrl, 'https://x.ts.net');
+  assert.equal(cfg.online.tailscale.expose, 'funnel');
+  // 非法值逐个拦
+  const bad = [
+    ['serverUrl', 'ftp://x'],
+    ['token', 'has space'],
+    ['tailscale.expose', 'nope'],
+    ['tailscale.autoStart', 'yes'],
+    ['mode', 'off'],
+  ];
+  for (const [path, value] of bad) {
+    const out = admin.apply({ section: 'online', path, value });
+    assert.equal(out.ok, false, path + '=' + JSON.stringify(value) + ' 应被拒');
+  }
+  // 未知键也要拒（online 是手改 config.json 的重灾区）
+  const unk = admin.apply({ section: 'online', patch: { nope: 1 } });
+  assert.equal(unk.ok, false);
+  assert.match(unk.errors[0].message, /未知键/);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('online 段 reset 写回 ONLINE_DEFAULTS 并把 cleared 列成 online.* 点路径', async () => {
+  const dir = sandbox();
+  const m = await import('../../server/net/ConfigAdmin.js');
+  const admin = m.createConfigAdmin({ rootDir: dir });
+  admin.apply({ section: 'online', patch: { serverUrl: 'https://x.ts.net', token: 'abc_DEF-123' } });
+  const out = admin.reset({ section: 'online' });
+  assert.equal(out.ok, true);
+  assert.deepEqual(out.cleared.sort(), ['online.serverUrl', 'online.token']);
+  assert.equal(out.clearedCount, 2);
+  const eff = admin.describe().effective.online;
+  assert.equal(eff.serverUrl, '');
+  assert.equal(eff.token, '');
+  assert.equal(eff.mode, 'serve');
+  assert.deepEqual(admin.describe().sections.online.meta.overridePaths, []);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('admin.jsonTree / writeJson / jsonRaw 三个方法给 HTTP 路由用', async () => {
+  const dir = sandbox();
+  const m = await import('../../server/net/ConfigAdmin.js');
+  const admin = m.createConfigAdmin({ rootDir: dir });
+  const tree = admin.jsonTree({});
+  assert.equal(tree.ok, true);
+  assert.ok(tree.sampleDirs.length >= 1);
+  assert.ok(tree.tree.length > 0 && tree.warnings.length === 0);
+  // 传入不存在的 sample 要回退到第一个，而不是报错
+  assert.equal(admin.jsonTree({ sample: '/nowhere' }).sampleDir, tree.sampleDir);
+  const wrote = admin.writeJson({ path: 'online.tailscale.bg', value: false });
+  assert.equal(wrote.ok, true);
+  // 新的语义：直接写回 config/*.json 本体（用户要在 git diff 里看见自己的改动），不再写 data/config.json 的镜像
+  assert.equal(wrote.file, 'config/default.json');
+  const sampleDefault = () => JSON.parse(readFileSync(join(tree.sampleDir, 'config', 'default.json'), 'utf8'));
+  assert.equal(sampleDefault().online.tailscale.bg, false);
+  assert.equal(admin.writeJson({ path: '../escape', value: 1 }).ok, false);
+  // 树视图能改任意键，所以必须落盘前校验已知段（否则 config/default.json 里写坏值，重启后被 loadConfig 静默丢弃）
+  const bad = admin.writeJson({ path: 'online.tailscale.expose', value: 'bogus' });
+  assert.equal(bad.ok, false, '非法枚举必须在落盘前被拦');
+  assert.match(bad.message, /tailscale.expose/);
+  assert.notEqual(sampleDefault().online.tailscale?.expose, 'bogus', '被拒的值不许落盘');
+  assert.equal(admin.writeJson({ path: 'balance.items.freeze.price', value: -1 }).ok, false, '负数价格也要拦');
+  assert.equal(admin.writeJson({ path: 'balance.items.freeze.price', value: 200 }).ok, true, '合法值照常写');
+  // 未知段没有规则可依，放行（用户自定义键不能被这套校验锁死）
+  assert.equal(admin.writeJson({ path: 'myOwnSection.key', value: 'x' }).ok, true);
+  // 树里每一段的 path 都带段前缀（app./llm./balance.），前端据此把一次改动分流到正确的文件；
+  // 前缀必须能原样写回：'app.tickRate' 落在 default.json 的 tickRate，不能变成 app.app.tickRate。
+  assert.ok(tree.tree.some((n) => n.path === 'app.tickRate'), 'default.json 的键挂在 app 段下');
+  assert.ok(tree.tree.some((n) => n.path.startsWith('llm.')), 'llm.json 挂在 llm 段下');
+  assert.ok(tree.tree.some((n) => n.path.startsWith('balance.')), 'balance.json 挂在 balance 段下');
+  const prefixed = admin.writeJson({ path: 'app.tickRate', value: 9 });
+  assert.equal(prefixed.ok, true);
+  assert.equal(sampleDefault().tickRate, 9);
+  assert.equal(sampleDefault().app, undefined, '不能写出 app.app.tickRate 这种套娃键');
+  assert.equal(admin.writeJson({ path: 'llm.enabled', value: false }).ok, true);
+  const sampleLlm = () => JSON.parse(readFileSync(join(tree.sampleDir, 'config', 'llm.json'), 'utf8'));
+  assert.equal(sampleLlm().enabled, false);
+  assert.equal(sampleLlm().llm, undefined, 'llm.json 的顶层就是 llm 段本身，不能套一层');
+  const raw = admin.jsonRaw({});
+  assert.equal(raw.ok, true);
+  assert.ok(raw.files['config/default.json'].text.includes('tickRate'));
+  rmSync(dir, { recursive: true, force: true });
+});

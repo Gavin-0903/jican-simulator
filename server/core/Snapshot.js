@@ -138,7 +138,9 @@ export class Snapshot {
         roundMs: state.roundMs,
         targetScore: state.targetScore,
         speedMult: state.speedMult,
-        playerCharId: state.playerCharId,
+        // 多座位（v0.9）：每人看到的是「他自己那个角色」，不是房主的主玩家。
+        // 前端用它拿成绩/名次，串台就是把别人的分当自己的。
+        playerCharId: viewer ? viewer.id : state.playerCharId,
         seed: state.seed,
         llm: llm ? { mode: llm.mode, reason: llm.reason } : null,
       },
@@ -168,6 +170,19 @@ export class Snapshot {
     if (this.history.length > this.historySize) this.history.shift();
   }
 
+  /**
+   * 观战视图：公共投影（me=null，playerCharId 保留主玩家）。
+   *
+   * 为什么观战者也需要自己的 Snapshot 实例：增量包是「与上一帧视图的差分」，
+   * 观战者收到的那份公共视图必须自己算差分，否则要么收不到 delta（没实例），
+   * 要么拿玩家的 prev 去差分（串台）。
+   */
+  publicView(state, llm = null) {
+    const view = this.build(state, null, llm);
+    view.game.playerCharId = state.playerCharId;
+    return view;
+  }
+
   full(state, viewerId, events = [], llm = null) {
     const view = this.build(state, viewerId, llm);
     this.prev = view;
@@ -178,6 +193,58 @@ export class Snapshot {
       events: this.filterEvents(state, viewerId, events),
     };
     this.remember('snapshot', payload);
+    return payload;
+  }
+
+  /** 观战者的增量包：公共视图（me 恒 null），差分口径与 fullPublic 一致。 */
+  deltaPublic(state, events = [], llm = null) {
+    if (!this.prev) return null;
+    const view = this.publicView(state, llm);
+    const evs = this.filterEvents(state, null, events);
+    const payload = this.diffView(state, view, evs);
+    this.prev = view;
+    if (Object.keys(payload).length <= 2) return null;
+    payload.seq = ++this.seq;
+    this.remember('delta', payload);
+    return payload;
+  }
+
+  /** 观战者的全量包：公共视图 + 事件过滤（无 viewer = 只看 AUDIENCE.ALL）。 */
+  fullPublic(state, events = [], llm = null) {
+    const view = this.publicView(state, llm);
+    this.prev = view;
+    const payload = {
+      tick: state.tick,
+      seq: ++this.seq,
+      state: { game: view.game, chars: Object.values(view.chars), pcs: Object.values(view.pcs), me: view.me, roster: this.roster(state) },
+      events: this.filterEvents(state, null, events),
+    };
+    this.remember('snapshot', payload);
+    return payload;
+  }
+
+  /** 两个视图之间的字段级差分（player/delta 与 public 共用同一套口径）。 */
+  diffView(state, view, evs) {
+    const payload = { tick: state.tick, seq: 0 };
+    const game = diffObject(this.prev.game, view.game);
+    if (game) payload.game = game;
+    const chars = [];
+    for (const id of Object.keys(view.chars)) {
+      const d = diffObject(this.prev.chars[id], view.chars[id]);
+      if (d) chars.push({ id, ...d });
+    }
+    if (chars.length) payload.chars = chars;
+    const pcs = [];
+    for (const id of Object.keys(view.pcs)) {
+      const d = diffObject(this.prev.pcs[id], view.pcs[id]);
+      if (d) pcs.push({ id, ...d });
+    }
+    if (pcs.length) payload.pcs = pcs;
+    if (view.me) {
+      const me = diffObject(this.prev.me, view.me);
+      if (me) payload.me = me;
+    }
+    if (evs.length) payload.events = evs;
     return payload;
   }
 

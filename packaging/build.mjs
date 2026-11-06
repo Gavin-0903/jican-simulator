@@ -201,6 +201,10 @@ function ensureLaunchTools() {
     '/reference:System.Drawing.dll',
     '/reference:System.Net.dll',
   ];
+  // 外壳源文件清单：RoomForm / WebView2Setup 都在 Launch.cs 里（同文件编译，csc 只吃一个入口）。
+  // 以后若要再拆文件（packaging/win/*.cs），必须加到这个数组里，否则 staleness 判定会漏掉改动
+  // → SEA / 安装包里还是旧的 Launch.exe，而且构建日志一切正常（v0.5 起把清单显式写出来）。
+  const shellSources = [launchSrc];
   const stale = (src, out) => !existsSync(out) || statSync(src).mtimeMs > statSync(out).mtimeMs;
   ensureIconTool(); // LaunchGen 引用 IconRes.exe，必须先编译出来
   // WebView2 托管 dll 必须与 Launch.exe 同目录：csc 只把程序集引用写进元数据，
@@ -221,10 +225,10 @@ function ensureLaunchTools() {
       copyFileSync(nativeSrc, join(destDir, 'WebView2Loader.dll'));
     }
   };
-  if (stale(launchSrc, launchStub) || stale(wv2Core, launchStub)) {
+  if (shellSources.some((s) => stale(s, launchStub)) || stale(wv2Core, launchStub)) {
     console.log('[build] 编译 GUI 外壳 Launch.exe…');
     // 必须 /target:winexe（Subsystem=2），否则双击仍然弹黑框
-    execFileSync(csc, ['/nologo', '/target:winexe', '/out:' + launchStub, ...refs, ...winRefs, launchSrc], { stdio: 'inherit' });
+    execFileSync(csc, ['/nologo', '/target:winexe', '/out:' + launchStub, ...refs, ...winRefs, ...shellSources], { stdio: 'inherit' });
   }
   stageWv2(binDir);
   stageWv2(JSON_OUT);

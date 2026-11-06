@@ -1,11 +1,42 @@
-// 大厅：选择身份 / 班级 / 角色，开始新局或继续存档。
-// 顶部另有「单机 / 联机」切换与联机房间面板（需求 3，见 NetPanel）。
+// 大厅（v0.9 座位制）：不再在大厅里挑「学生/老师 + 班级 + 角色卡片」。
+// 座位是唯一的角色来源 —— 单机直接用默认角色开局，联机的座位在房间里选（见 main.js 的座位表）。
+// 顶部的联机面板（含「单机 / 联机」切换）由 NetPanel 画；房间页（地址栏带 token/id 或 ?room=）
+// 上那个切换整块不画 —— 那一页必然是联机（需求 v0.10，见 NetPanel 的 roomPage）。
 
 import { h, icon, store as ls, fmtClock } from '../util/dom.js';
 import { forceEnglishInput } from '../util/ime.js';
 import { MSG } from '/shared/constants.js';
+import { defaultSoloCharacter } from '../net/roomUrl.js';
 
 const CLASS_COLOR = { 1: 'var(--class-1)', 2: 'var(--class-2)', 3: 'var(--class-3)' };
+
+/** 身份卡的配色：老师走强调色，学生按班级上色（和角色卡片时代同一套 CSS 变量）。 */
+const charColor = (e) => (e?.role === 'teacher' ? 'var(--accent-teacher)' : CLASS_COLOR[e?.classId] ?? 'var(--class-1)');
+
+/**
+ * 单机「我是谁」卡：只读展示这次要扮演谁，旁边一个「换一个」。
+ *
+ * 为什么不再是一整片角色卡片：用户的诉求是「联机窗口干掉人物选择，改成每个玩家选自己的座位」。
+ * 大厅里留一片可点的人头，就等于在房间里还有第二套"我选谁"的入口 —— 两边会漂移，
+ * 而且新手会以为大厅选了座位等于房间也选好了。所以这里降级成一张卡 + 一个循环切换按钮。
+ */
+function soloCard({ char, roster, onCycle, disabled }) {
+  return h('div.solo-card', { style: { '--c': charColor(char) }, 'data-char': char?.id ?? '' },
+    h('span.solo-dot'),
+    h('div.grow', {},
+      h('div.solo-name', { text: char ? char.name : '没有可用角色' }),
+      h('div.solo-sub', {
+        text: char
+          ? `${char.username ?? ''}${char.role === 'teacher' ? ' · 老师' : ` · ${char.classId ?? 1} 班`} · 其余 ${Math.max(0,(roster?.length ?? 1) - 1)} 人由 AI 驱动`
+          : '配置里一个角色都没有：请到「设置」里检查人物表',
+      })),
+    h('button.btn.ghost.sm.solo-swap', {
+      type: 'button',
+      title: '换成下一个人物（只影响单机）',
+      disabled: disabled || !(roster?.length > 1),
+      onclick: onCycle,
+    }, icon('refresh', 'sm'), '换一个'));
+}
 
 export class Lobby {
   constructor(root, store, net, netPanel = null) {
@@ -13,10 +44,7 @@ export class Lobby {
     this.store = store;
     this.net = net;
     this.netPanel = netPanel;
-    const saved = ls.get('jican.lastChar');
-    this.selected = saved || 's1-01';
-    this.role = this.selected.startsWith('t') ? 'teacher' : 'student';
-    this.classId = this.role === 'student' ? Number(this.selected[1]) || 1 : 1;
+    this.pickId = ls.get('jican.lastChar') || ''; // 单机想用的角色（'' = 用默认的第一个学生）
     this.seed = '';
     this.settingsSlot = null; // 由 main.js 传入的「设置」入口挂载点（见 LobbySettingsButton）
   }
@@ -24,6 +52,33 @@ export class Lobby {
   show(on) {
     this.root.hidden = !on;
     if (on) this.render();
+  }
+
+  /**
+   * 单机这次扮演谁：lastChar（或本地点过的「换一个」）优先，其次 roster 里第一个学生。
+   * 判定全在 roomUrl.js 的 defaultSoloCharacter 里（有单测钉住），这里只管存和画。
+   */
+  soloCharacter(lobby = this.store.lobby) {
+    const roster = Array.isArray(lobby?.roster) ? lobby.roster : [];
+    return defaultSoloCharacter(roster, this.pickId);
+  }
+
+  /** 「换一个」：在 roster 里按顺序挑下一个（跳过老师以外没有的情况下也不会空转）。 */
+  cycleSolo() {
+    const roster = Array.isArray(this.store.lobby?.roster) ? this.store.lobby.roster : [];
+    if (roster.length < 2) return;
+    const ids = roster.map((e) => e.id);
+    const cur = this.soloCharacter()?.id;
+    const next = ids[(Math.max(0, ids.indexOf(cur)) + 1) % ids.length];
+    this.pickId = next;
+    ls.set('jican.lastChar', next);
+    this.render();
+  }
+
+  /** 单机开局：只带 characterId（role 由服务端按 roster 反查，前端别自己猜）。 */
+  startSolo(char) {
+    if (!char || this.store.role === 'spectator') return;
+    this.net.send(MSG.JOIN, { characterId: char.id, role: char.role, seed: this.seed ? Number(this.seed) >>> 0 : null });
   }
 
   render() {
@@ -43,41 +98,28 @@ export class Lobby {
       this.netPanel?.mount(netSlot);
       return;
     }
-    const roster = lobby.roster;
     const r = lobby.rules;
-    const spectator = this.store.role === 'spectator';
-    const pick = (id) => {
-      this.selected = id;
-      ls.set('jican.lastChar', id);
-      this.render();
-    };
-    const list = roster.filter((e) => e.role === this.role && (this.role === 'teacher' || e.classId === this.classId));
-    if (!list.some((e) => e.id === this.selected)) this.selected = list[0]?.id;
-    const sel = roster.find((e) => e.id === this.selected);
-
-    const roleSeg = h('div.segmented', { role: 'group', 'aria-label': '身份' },
-      ...[['student', '学生', 'user'], ['teacher', '老师', 'teacher']].map(([v, label, ic]) =>
-        h('button', { 'aria-pressed': String(this.role === v), onclick: () => { this.role = v; this.selected = null; this.render(); } }, icon(ic, 'sm'), label)));
-    const classSeg = this.role === 'student'
-      ? h('div.segmented', { role: 'group', 'aria-label': '班级' },
-        ...[1, 2, 3].map((k) => h('button', { 'aria-pressed': String(this.classId === k), onclick: () => { this.classId = k; this.selected = null; this.render(); } }, `${k} 班`)))
-      : null;
-    const cards = h('div.roster', {}, ...list.map((e) =>
-      h('button.roster-card', { 'aria-pressed': String(e.id === this.selected), onclick: () => pick(e.id), style: { '--c': e.role === 'teacher' ? 'var(--accent-teacher)' : CLASS_COLOR[e.classId] } },
-        h('span.rc-name', {}, h('span.rc-dot'), e.name),
-        h('span.rc-sub', { text: e.role === 'teacher' ? `${e.username} · ${e.classId ? `${e.classId} 班任课` : '办公室'}` : e.username }))));
+    // 「这是被别的窗口夺权的旁看」和「我在房间里，只是这局还没轮到我操作」是两回事：
+    //   soloSpectator —— 单机通道被另一个窗口接管（老行为：红条 + 禁用开始按钮 + 「点此夺回」）。
+    //   inRoom        —— 有房间上下文（welcome.room 或地址栏本来就是房间页），此时角色来源是房间座位表，
+    //                    大厅的「单机 · 你要扮演谁」和「开始游戏」根本不适用，不该画（也不该红着脸喊夺权）。
+    const roomId = this.store.welcome?.room?.id ?? '';
+    const inRoom = Boolean(roomId) || Boolean(this.netPanel?.roomPage);
+    const soloSpectator = this.store.role === 'spectator' && !inRoom;
+    const char = this.soloCharacter(lobby);
+    const roster = Array.isArray(lobby.roster) ? lobby.roster : [];
+    const isTeacher = char?.role === 'teacher';
 
     const llm = lobby.llm;
     const llmBadge = h(`span.chip.badge-llm.${llm?.mode === 'llm' ? 'on' : 'degraded'}`, { title: llm?.reason ?? '' },
       h('span.dot'), llm?.mode === 'llm' ? `AI 增强：${llm.model}` : 'AI 增强：未启用（纯规则 AI）');
 
-    const isTeacher = this.role === 'teacher';
     const rules = h('ul.rules', {},
       ...(isTeacher
         ? [
-          ['eye', [`扇形视野 `, h('b', { text: `${r.teacherVision.radius}px · ±${r.teacherVision.halfAngleDeg}°` }), '，墙和桌子会挡住视线，鼠标控制朝向']],
+          ['eye', ['扇形视野 ', h('b', { text: `${r.teacherVision.radius}px · ±${r.teacherVision.halfAngleDeg}°` }), '，墙和桌子会挡住视线，鼠标控制朝向']],
           ['yen', ['亲眼看到学生 JC 或检查到有人用别人电脑：', h('b', { text: `工资 +${r.catchReward}￥` })]],
-          ['warn', [`本班学生每被 JC 一次：`, h('b', { text: `−${r.classLosePenalty}￥` }), `；初始 ${r.initialSalary}￥，`, h('b', { text: '工资 < 0 即失败' })]],
+          ['warn', ['本班学生每被 JC 一次：', h('b', { text: `−${r.classLosePenalty}￥` }), `；初始 ${r.initialSalary}￥，`, h('b', { text: '工资 < 0 即失败' })]],
           ['pc', ['电脑旁亮 ', h('b', { text: '红圈' }), ' 说明有人在用别人的电脑，靠近按 E 检查']],
         ]
         : [
@@ -89,7 +131,7 @@ export class Lobby {
           ['bolt', ['厕所停留叠加速度，聊天室缓慢提升全属性；积分 ≤ ', h('b', { text: String(r.failScore) }), ' 被淘汰']],
         ]).map(([ic, parts]) => h('li', {}, icon(ic, 'sm'), h('span', {}, ...parts))));
 
-    const resume = lobby.resumable && !spectator
+    const resume = lobby.resumable && !soloSpectator
       ? h('div.resume-box', {}, icon('refresh'),
         h('div.grow', { text: `发现未完成的对局：${lobby.resumable.playerName ?? lobby.resumable.playerCharId}，已进行 ${fmtClock(lobby.resumable.elapsedMs)}` }),
         h('button.btn.gold.sm', { onclick: () => this.net.send(MSG.JOIN, { resume: true }) }, '继续上局'))
@@ -98,34 +140,36 @@ export class Lobby {
     const seedInput = h('input.input', { placeholder: '随机种子（可选）', inputmode: 'numeric', value: this.seed, 'aria-label': '随机种子', oninput: (e) => { this.seed = e.target.value.replace(/\D/g, '').slice(0, 10); e.target.value = this.seed; } });
     forceEnglishInput(seedInput);
     const start = h('button.btn.primary', {
-      disabled: !sel || spectator,
-      onclick: () => {
-        const seed = this.seed ? Number(this.seed) >>> 0 : null;
-        this.net.send(MSG.JOIN, { characterId: sel.id, role: sel.role, seed });
-      },
-    }, icon('play', 'sm'), sel ? `以 ${sel.name} 开始` : '选择角色');
+      disabled: !char || soloSpectator,
+      title: soloSpectator ? '已有其他窗口在控制游戏' : char ? `以 ${char.name} 开始单机` : '没有可用角色',
+      onclick: () => this.startSolo(this.soloCharacter()),
+    }, icon('play', 'sm'), soloSpectator ? '观战模式' : '开始游戏');
 
     const netSlot = h('div.net-slot');
     this.root.replaceChildren(h('div.card.lobby-card', {},
       h('div.lobby-top', {},
         h('img.brand-mark', { src: '/assets/icons/favicon.svg', alt: '' }),
-        h('div', {}, h('div.brand-title', { text: '机惨模拟器' }), h('div.brand-sub', { text: `30 名学生 + 5 名老师 · 你扮演其中一人，其余由 AI 驱动 · 单局 ${Math.round(lobby.round.durationMs / 60000)} 分钟` })),
+        h('div', {}, h('div.brand-title', { text: '机惨模拟器' }), h('div.brand-sub', { text: `${roster.length || '30 名'} 名学生 + 5 名老师 · 你扮演其中一人，其余由 AI 驱动 · 单局 ${Math.round(lobby.round.durationMs / 60000)} 分钟` })),
         h('div.spacer'),
-        this.settingsSlot ? this.settingsSlot() : null,
+        ...(this.settingsSlot ? [this.settingsSlot()] : []),
         llmBadge),
       netSlot,
-      spectator ? h('div.note.warn', {}, icon('warn', 'sm'), '已有其他窗口在控制游戏，当前为观战模式。关闭那个窗口后刷新本页即可接管。') : null,
-      resume,
+      // 注意：appendChild/条件三元里的 null 会被当成字符串「null」画出来（大厅里实测出现过一枚孤儿 "null"），
+      // 所以条件子节点一律用 ...[] 展开，跟 main.js 的 renderPlayersPanel 一个规矩。
+      ...(soloSpectator ? [h('div.note.warn', {}, icon('warn', 'sm'), '已有其他窗口在控制游戏，当前为观战模式。关闭那个窗口后刷新本页即可接管。')] : []),
+      ...(resume ? [resume] : []),
       h('div.lobby-grid', {},
-        h('div.lobby-section', {},
-          h('div.section-title', {}, '选择角色'),
-          h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, roleSeg, classSeg),
-          cards),
+        // 房间页不画「单机 · 你要扮演谁」：这一页的角色只能来自房间座位表（见 main.js 的座位表 / NetPanel 的房间面板）
+        ...(inRoom ? [] : [h('div.lobby-section', {},
+          h('div.section-title', {}, '单机 · 你要扮演谁'),
+          soloCard({ char, roster, disabled: soloSpectator, onCycle: () => this.cycleSolo() }),
+          h('div.note.seat-note', {}, icon('user', 'sm'), '联机时不在这里选人：进房间后每个玩家在自己的座位行里选角色，房主还能替你指派。'))]),
         h('div.lobby-section', {},
           h('div.section-title', {}, isTeacher ? '老师怎么玩' : '学生怎么玩'),
           rules,
-          lobby.round.targetScore ? h('div.note', {}, icon('trophy', 'sm'), `学生率先达到 ${lobby.round.targetScore} 分立即获胜；否则时间到按积分排名。`) : null)),
-      h('div.lobby-actions', {}, seedInput, h('div.spacer'), start)));
+          ...(lobby.round.targetScore ? [h('div.note', {}, icon('trophy', 'sm'), `学生率先达到 ${lobby.round.targetScore} 分立即获胜；否则时间到按积分排名。`)] : []))),
+      // 房间页也没有「开始游戏」：开局按钮在房间面板里（只有房主能点），这里再放一个只会 E_STATE
+      ...(inRoom ? [] : [h('div.lobby-actions', {}, seedInput, h('div.spacer'), start)])));
     this.netPanel?.mount(netSlot);
   }
 }

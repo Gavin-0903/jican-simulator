@@ -71,7 +71,7 @@ test('每人最多一间房（MAX_ROOMS_PER_USER）', () => {
   assert.equal(MAX_ROOMS_PER_USER, 1);
 });
 
-test('join：房间号 + Token + 邀请码全对才成功，任一不符都 500', () => {
+test('join：房间号 + Token + 邀请码全对才成功，任一不符都拒绝（房间不存在 404，其余 500）', () => {
   const rooms = new RoomManager({ logger: quiet });
   const ownerKey = makeKey(7);
   const guestKey = makeKey(8);
@@ -86,7 +86,9 @@ test('join：房间号 + Token + 邀请码全对才成功，任一不符都 500'
   assert.equal(badInv.status, 500);
   const noRoom = rooms.join({ ...base, roomId: '000000', token: room.token, invCode: room.invCode });
   assert.equal(noRoom.ok, false);
-  assert.equal(noRoom.status, 500);
+  // 房间不存在/已被清除 → 404，不再混成 500（清除房间后旧房间号必须能被前端识别为「房间没了」）
+  assert.equal(noRoom.status, 404);
+  assert.equal(noRoom.code, 'ROOM_NOT_FOUND');
 });
 
 test('join 成功会结清违规计数', () => {
@@ -98,6 +100,38 @@ test('join 成功会结清违规计数', () => {
   assert.equal(rooms.strikeCount(guestKey), 1);
   rooms.join({ idKey: guestKey, username: '访客', roomId: room.id, token: room.token, invCode: room.invCode });
   assert.equal(rooms.strikeCount(guestKey), 0, '成功加入后违规清零');
+});
+
+test('close：只有房主能清除房间，清除后房间号立即作废（404 ROOM_NOT_FOUND）', () => {
+  const rooms = new RoomManager({ logger: quiet });
+  const ownerKey = makeKey(21);
+  const guestKey = makeKey(22);
+  const room = rooms.create({ idKey: ownerKey, username: '房主' }).room;
+  // 非房主 → 403，且房间必须还在
+  const denied = rooms.close(room.id, guestKey);
+  assert.equal(denied.ok, false);
+  assert.equal(denied.status, 403);
+  assert.equal(denied.code, 'NOT_OWNER');
+  assert.ok(rooms.rooms.get(room.id), '被拒绝时不能把房间删掉');
+  // 房主 → 成功删除
+  const ok = rooms.close(room.id, ownerKey);
+  assert.equal(ok.ok, true);
+  assert.equal(ok.closed, true);
+  assert.equal(rooms.rooms.has(room.id), false);
+  // 重复清除 → 404
+  const again = rooms.close(room.id, ownerKey);
+  assert.equal(again.ok, false);
+  assert.equal(again.status, 404);
+  assert.equal(again.code, 'ROOM_NOT_FOUND');
+  // 房间没了：任何人再 join 都必须是 404 而不是 500（前端靠 code 跳回大厅）
+  const rejoin = rooms.join({ idKey: guestKey, username: '访客', roomId: room.id, token: room.token, invCode: room.invCode });
+  assert.equal(rejoin.ok, false);
+  assert.equal(rejoin.status, 404);
+  assert.equal(rejoin.code, 'ROOM_NOT_FOUND');
+  // 房主清掉旧房后可以立刻建新房（byUser 不该再算上已删除的那间）
+  const fresh = rooms.create({ idKey: ownerKey, username: '房主' });
+  assert.equal(fresh.ok, true);
+  assert.notEqual(fresh.room.id, room.id);
 });
 
 test('parseRoomUrl：完整 URL 解析出全部字段', () => {
@@ -135,10 +169,10 @@ test('buildRoomUrl 与 parseRoomUrl 往返一致', () => {
 });
 
 /** 把大厅路由挂到真实 HTTP 服务上，用 fetch 跑一遍（与线上入口同一段代码）。 */
-async function withLobby(fn) {
+async function withLobby(fn, opts = {}) {
   const rooms = new RoomManager({ logger: quiet });
   const idKey = makeKey(20);
-  const route = createLobbyRouter({ rooms, idKey, serverName: '测试源', logger: quiet });
+  const route = createLobbyRouter({ rooms, idKey, serverName: '测试源', logger: quiet, lobby: opts.lobby });
   const server = createServer((req, res) => {
     if (!route(req, res)) {
       res.writeHead(404, { 'content-type': 'application/json' });
@@ -195,14 +229,54 @@ test('LobbyHttp /api/net/join：create 建房成功返回 wsPath，同房 token 
     assert.equal(joined.status, 200);
     const jb = await joined.json();
     assert.equal(jb.ok, true);
-    assert.ok(jb.room.members.includes('访客'));
+    // v0.8 排队制：type=join 只提交申请，不再直接进 room.members（要房主审批，审批逻辑在 room-control.test.js）。
+    assert.equal(jb.pending, true, 'join 只是提交申请');
+    assert.equal(jb.room.members.includes('访客'), false, '审批前不该出现在成员里');
+    assert.equal(jb.room.pendingCount, 1, '申请要计入 pendingCount');
     // token 错 → 500
     const bad = await fetch(`${origin}/api/net/join?token=WRONG&id=${guest}&type=join&roomid=${id}&invcode=${invCode}&username=x`);
     assert.equal(bad.status, 500);
-    // 房间不存在 → 500
+    // 房间不存在 → 404（与「房间已被房主清除」同一语义）
     const none = await fetch(`${origin}/api/net/join?token=${token}&id=${guest}&type=join&roomid=000000&invcode=${invCode}&username=x`);
-    assert.equal(none.status, 500);
+    assert.equal(none.status, 404);
   });
+});
+
+test('LobbyHttp /api/lobby/room action=close：非房主 403，房主 200 closed，之后 join 404', async () => {
+  // /api/lobby/room/* 只有挂了联机网关（lobby）才可用，没挂直接 501 —— 这里给个最小桩。
+  const lobby = { closeRoom() {} };
+  await withLobby(async ({ origin }) => {
+    const owner = makeKey(23);
+    const guest = makeKey(24);
+    const created = await fetch(`${origin}/api/net/join?token=T1&id=${owner}&type=create&username=${encodeURIComponent('房主')}`);
+    assert.equal(created.status, 200);
+    const { room } = await created.json();
+    // 路由形如 /api/lobby/room/<action>（见 server/net/LobbyHttp.js:574-583），不是 body 里的 action。
+    const post = (id, body) => fetch(`${origin}/api/lobby/room/close`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ roomid: id, ...body }),
+    });
+    // 非房主：403，房间必须还在
+    const denied = await post(room.id, { id: guest });
+    assert.equal(denied.status, 403);
+    assert.equal((await denied.json()).code, 'NOT_OWNER');
+    // 房主：200 closed（响应里不再带 room 视图 —— 房间已经删了）
+    const ok = await post(room.id, { id: owner });
+    assert.equal(ok.status, 200);
+    const ob = await ok.json();
+    assert.equal(ob.ok, true);
+    assert.equal(ob.closed, true);
+    assert.equal(ob.roomId, room.id);
+    assert.equal(ob.room, undefined, '房间已删除，不该再返回视图');
+    // 重复清除 → 404
+    const again = await post(room.id, { id: owner });
+    assert.equal(again.status, 404);
+    // 清除后别人再按老房间号进来 → 404 ROOM_NOT_FOUND（前端据此跳回大厅）
+    const rejoin = await fetch(`${origin}/api/net/join?token=${room.token}&id=${guest}&type=join&roomid=${room.id}&invcode=${room.invCode}&username=x`);
+    assert.equal(rejoin.status, 404);
+    assert.equal((await rejoin.json()).code, 'ROOM_NOT_FOUND');
+  }, { lobby });
 });
 
 test('LobbyHttp 未知路径不接管（返回 false 交给上层）与 OPTIONS 预检', async () => {

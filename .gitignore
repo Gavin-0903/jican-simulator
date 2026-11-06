@@ -15,3 +15,7 @@ packaging/win/bin/
 Thumbs.db
 .idea/
 .vscode/
+# 浏览器探测脚本与联机 UI 调试截图（体积大且属本机产物，不进仓库）
+browser-screenshots/
+# 下载站里的安装包本体（单文件 48MB，由 Releases 分发，仓库只保留页面与清单）
+jican-simulator-download/download/

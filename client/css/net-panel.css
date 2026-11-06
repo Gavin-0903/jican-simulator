@@ -1,0 +1,202 @@
+/* ============================================================================
+   v0.8 联机面板（.net2-* + latency-*）样式
+   为什么补这一段：NetPanel.js 重写时同样只落了 DOM，样式缺失，面板是裸 DOM。
+   只新增 .net2-* / .latency-* ，不动既有规则。
+   ============================================================================ */
+
+/* 面板容器沿用 .card，这里只补内部布局。
+   min-height:0 + 允许收缩：面板比 .lobby-card 高时不能把自己撑大，
+   否则「高级」区被裁在外框底下（.lobby-card 是 overflow:auto 的滚动容器）。 */
+.net2-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; }
+.net-slot { min-width: 0; min-height: 0; }
+
+/* 头部：标题 + 状态灯 */
+.net2-head { display: flex; align-items: center; gap: 8px; }
+.net2-head h2, .net2-head .net2-big { margin: 0; color: var(--text); font: 700 var(--fs-lg)/1.2 var(--font); }
+.net2-dot {
+  flex: none; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-3); box-shadow: 0 0 0 3px rgba(255, 255, 255, .05);
+}
+.net2-dot.on { background: var(--ok); box-shadow: 0 0 0 3px rgba(79, 209, 139, .18); }
+.net2-dot.warn { background: var(--warn); box-shadow: 0 0 0 3px rgba(255, 181, 71, .18); }
+.net2-dot.err { background: var(--danger); box-shadow: 0 0 0 3px rgba(255, 107, 107, .18); }
+
+/* 横向按钮组 */
+.net2-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.net2-cta { display: flex; gap: 8px; flex-wrap: wrap; }
+.net2-mono { font-family: var(--mono); }
+/* 高级区「再次打开游戏窗口」一行：按钮靠左，说明文字跟在后面（窄屏时自动换行到下一行）。
+   只影响这一行自己的排布，不动 .net2-field 那套既有栅格。 */
+.net2-reopen { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.net2-reopen .net2-hint.quiet { flex: 1 1 220px; min-width: 0; }
+.net2-link, .net2-openlink {
+  color: var(--accent-player); text-decoration: none;
+  border-bottom: 1px dotted rgba(255, 207, 92, .5);
+  font: var(--fs-xs)/1.5 var(--font); cursor: pointer;
+}
+.net2-link:hover, .net2-openlink:hover { color: var(--text); border-bottom-color: var(--text); }
+.net2-hint {
+  padding: 7px 10px; border-radius: var(--radius-btn);
+  border: 1px solid rgba(255, 207, 92, .35); background: rgba(255, 207, 92, .08);
+  color: var(--warn); font: var(--fs-xs)/1.55 var(--font);
+}
+/* 普通说明文字：不再是金色告警条，避免一屏里三四条金色横幅抢注意力 */
+.net2-hint.quiet {
+  padding: 0; border: 0; background: none;
+  color: var(--text-3); font: var(--fs-xs)/1.55 var(--font);
+}
+.net2-linkrow, .net2-openline { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; color: var(--text-2); font: var(--fs-xs)/1.5 var(--font); }
+
+/* 键值行（连接信息） */
+.net2-kvs { display: flex; flex-direction: column; gap: 3px; }
+.net2-kv {
+  display: grid; grid-template-columns: minmax(88px, max-content) minmax(0, 1fr);
+  align-items: center; gap: 8px;
+  padding: 3px 0; border-top: 1px solid rgba(46, 56, 80, .35);
+  font: var(--fs-xs)/1.5 var(--font);
+}
+.net2-kv:first-child { border-top: 0; }
+.net2-kv-label { color: var(--text-3); font-weight: 600; }
+
+/* 表单字段 */
+.net2-field { display: flex; flex-direction: column; gap: 5px; margin: 6px 0; }
+.net2-field-label {
+  display: flex; align-items: center; gap: 6px;
+  color: var(--text-2); font: 600 var(--fs-xs)/1.5 var(--font);
+}
+/* 「已自动填入」小徽标：告诉用户这个值不是空的、是系统按默认参数填的，可以改。 */
+.net2-defaulted {
+  flex: none;
+  padding: 0 6px; border-radius: var(--radius-pill);
+  background: rgba(255, 207, 92, .16); color: var(--accent-player);
+  font: 700 10px/1.7 var(--font);
+}
+/* 自动填入的输入框左侧一条金边，和普通手填值区分开（用户手填后 JS 会摘掉属性）。 */
+input[data-defaulted="1"] { border-left: 2px solid rgba(255, 207, 92, .65); }
+.net2-field input, .net2-field select { width: 100%; }
+
+/* 提示条 */
+.net2-notice {
+  display: flex; align-items: flex-start; gap: 7px;
+  padding: 8px 10px; border-radius: var(--radius-btn);
+  border: 1px solid var(--line-strong); background: rgba(255, 255, 255, .04);
+  color: var(--text-2); font: var(--fs-xs)/1.5 var(--font);
+}
+.net2-notice.warn { border-color: rgba(255, 181, 71, .4); background: rgba(255, 181, 71, .08); color: var(--warn); }
+.net2-notice.err { border-color: rgba(255, 107, 107, .4); background: rgba(255, 107, 107, .08); color: var(--danger); }
+.net2-blocked {
+  display: flex; align-items: center; gap: 7px;
+  padding: 10px; border-radius: var(--radius-btn);
+  border: 1px dashed var(--line-strong); color: var(--text-3);
+  font: var(--fs-xs)/1.5 var(--font);
+}
+.net2-room-err { color: var(--danger); font: var(--fs-xs)/1.5 var(--font); }
+
+/* 房间页（独立游戏窗口）：只显示房间数据 + 一个选座入口，不画创建/加入。 */
+.net2-roompage { gap: 8px; }
+.net2-roompage-ops { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.net2-roompage-ops .net2-hint { font: var(--fs-xs)/1.5 var(--font); }
+
+/* 房间卡 */
+.net2-room {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 12px; border-radius: var(--radius-card);
+  border: 1px solid var(--line); background: var(--bg-panel-2);
+}
+.net2-room-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.net2-room-head .net2-mono { color: var(--text); font: 700 var(--fs-sm)/1.4 var(--mono); }
+
+/* 玩家列表 */
+.net2-playersbox { display: flex; flex-direction: column; gap: 6px; }
+.net2-playershead {
+  display: flex; align-items: center; justify-content: space-between;
+  color: var(--text-3); font: 600 var(--fs-xs)/1.5 var(--font);
+}
+.net2-players-count { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.net2-players, .net2-members { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.net2-player {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 8px; border-radius: 6px; /* 与 .cfg-* 输入框/预览块的 6px 统一（原来是 7px，两个面板看起来不齐） */
+  background: rgba(255, 255, 255, .04);
+  font: var(--fs-xs)/1.5 var(--font);
+}
+.net2-player-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.net2-player-role, .net2-role {
+  flex: none; padding: 0 6px; border-radius: var(--radius-pill);
+  background: rgba(255, 207, 92, .16); color: var(--accent-player);
+  font: 700 10px/1.7 var(--font);
+}
+.net2-player-role.student, .net2-role.student { background: rgba(255, 255, 255, .07); color: var(--text-2); }
+.net2-join { display: flex; flex-direction: column; gap: 8px; }
+
+/* 延迟徽章（HUD 里用）。JS 给的修饰类是 .ok / .over / .unknown。 */
+.latency-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 0 6px; border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, .06); color: var(--text-2);
+  font: 700 10px/1.7 var(--mono); font-variant-numeric: tabular-nums;
+}
+.latency-badge.ok { background: rgba(79, 209, 139, .14); color: var(--ok); }
+.latency-badge.over { background: rgba(255, 181, 71, .16); color: var(--warn); }
+.latency-badge.unknown { background: rgba(255, 255, 255, .06); color: var(--text-3); }
+.latency-tail { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+
+/* 高级折叠区 */
+.net2-adv { display: flex; flex-direction: column; }
+.net2-advhead {
+  display: flex; align-items: center; gap: 7px;
+  padding: 6px 0; border: 0; background: transparent;
+  color: var(--text-2); font: 600 var(--fs-xs)/1.5 var(--font);
+  cursor: pointer; text-align: left;
+}
+.net2-advhead:hover { color: var(--text); }
+.net2-advlabel { color: var(--text-3); font-weight: 600; }
+/* 折叠箭头：与配置弹窗的 .cfg-arrow 同一套做法——两条斜线段拼实心三角。
+   为什么不用 border 三角：在 flex 行里只画出 5x8 的小楔子，视觉上像一条短横
+   （用户原话「你是一个减号这个不对」）；为什么不用 ▸/▾ 字形：这两个码位在
+   Windows 字体回退里落到了终端的报告符号字体，渲染出来根本不是三角。
+   收起 = ▸（两条线朝右收拢），展开 = ▾（整体转 90° 朝下），不受字体影响。 */
+.net2-caret {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 14px; height: 14px;
+  color: var(--text-3);
+  transition: color var(--dur) var(--ease);
+}
+.net2-caret::before,
+.net2-caret::after {
+  content: '';
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 2px; height: 7px;
+  border-radius: 1px;
+  background: currentColor;
+  transform-origin: 50% 0;
+  transition: transform 120ms var(--ease);
+}
+.net2-caret::before { transform: translate(-50%, 0) rotate(34deg); }
+.net2-caret::after  { transform: translate(-50%, 0) rotate(-34deg); }
+.net2-advhead:hover .net2-caret { color: var(--text); }
+.net2-adv.open .net2-caret::before,
+.net2-adv[data-open="1"] .net2-caret::before,
+.net2-advhead[aria-expanded="true"] .net2-caret::before { transform: translate(-50%, 0) rotate(128deg); }
+.net2-adv.open .net2-caret::after,
+.net2-adv[data-open="1"] .net2-caret::after,
+.net2-advhead[aria-expanded="true"] .net2-caret::after { transform: translate(-50%, 0) rotate(52deg); }
+.net2-advbody {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 8px 0 4px 14px; border-left: 1px solid var(--line);
+}
+
+/* 复制房间提示语：一行按钮 + 只读文本框（含完整 256 位 token，供手动选中复制） */
+.net2-copy { display: flex; flex-direction: column; gap: 6px; }
+.net2-copyrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.net2-copyrow .btn { flex: 0 0 auto; }
+.net2-copytext {
+  width: 100%; min-height: 96px;
+  font: var(--fs-xs)/1.5 var(--mono);
+  resize: vertical;
+  word-break: break-all;
+  white-space: pre-wrap;
+}

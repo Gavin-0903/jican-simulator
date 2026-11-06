@@ -1,0 +1,281 @@
+/* ============================================================================
+   v0.8 配置面板（.cfg-*）样式
+   为什么忽然补这一段：ConfigPanel.js 整体重写时只落了 DOM 结构，样式一段没跟上，
+   面板在浏览器里是「裸 DOM」——三栏全 display:block 竖着堆、行高 43px、
+   .cfg-rows 没有固定高度所以没有滚轮、.cfg-arrow 是个空的 16x6 按钮（看着像个减号）。
+   本段只新增 .cfg-*，不动上面任何既有规则。
+   ============================================================================ */
+
+/* 弹窗本体：比默认 .modal 宽，高度锁死，让内部只有行区滚动。
+   高度必须一硬到底（height 而非仅 max-height）：只给 max-height 时，
+   中间那层 .modal-body 是 grid + 0 1 auto，会被内容顶到 1353px，
+   .cfg-rows 自己也跟着长到 1353，于是 clientHeight == scrollHeight，滚轮永远不出现。 */
+.modal.cfg-modal {
+  width: min(1120px, 96vw);
+  height: min(86vh, 820px);
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* 撑满弹窗并把高度一路传给 .cfg-shell */
+.modal.cfg-modal > .modal-head { flex: none; padding: 18px 18px 0; margin-bottom: 8px; }
+.modal.cfg-modal > .modal-foot { flex: none; padding: 0 18px 16px; }
+.modal.cfg-modal > .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  align-content: stretch;
+  overflow: hidden;
+}
+
+/* 三段式外壳：flashbar / shell / foot —— shell 撑满剩余高度 */
+.cfg-shell {
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1fr);
+  min-height: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+/* ---- 左导航 ---- */
+.cfg-nav {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 8px 12px;
+  border-right: 1px solid var(--line);
+  background: var(--bg-panel-2);
+  overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent;
+}
+.cfg-nav::-webkit-scrollbar { width: 10px; }
+.cfg-nav::-webkit-scrollbar-thumb {
+  background: var(--line-strong); border-radius: 999px;
+  border: 3px solid transparent; background-clip: padding-box;
+}
+.cfg-nav-item {
+  position: relative;
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 7px 10px;
+  border: 1px solid transparent; border-radius: var(--radius-btn);
+  background: transparent; color: var(--text-2);
+  font: 600 var(--fs-sm)/1.3 var(--font); text-align: left; cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.cfg-nav-item:hover { background: var(--bg-elev); color: var(--text); }
+.cfg-nav-item.active {
+  background: rgba(255, 207, 92, .1); color: var(--text);
+  border-color: rgba(255, 207, 92, .45);
+}
+.cfg-nav-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cfg-nav-badge {
+  flex: none; min-width: 18px; padding: 0 5px; border-radius: var(--radius-pill);
+  background: var(--accent-player); color: #12151c;
+  font: 700 10px/1.6 var(--font); text-align: center;
+}
+
+/* ---- 右面板 ---- */
+.cfg-pane {
+  display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  overflow: hidden; background: var(--bg-panel);
+}
+
+/* 工具栏：文件标签 + 可改项数 + 搜索 + 折叠按钮 */
+.cfg-toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; border-bottom: 1px solid var(--line);
+  background: var(--bg-panel-2);
+}
+.cfg-toolbar-title { display: flex; align-items: center; gap: 7px; color: var(--text); font: 700 var(--fs-sm)/1.2 var(--font); }
+.cfg-toolbar-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+.cfg-count {
+  padding: 1px 7px; border-radius: var(--radius-pill);
+  color: var(--text-3); background: rgba(255, 255, 255, .06);
+  font: 600 11px/1.6 var(--font);
+}
+.cfg-search { width: 180px; min-width: 110px; }
+
+/* 行区：唯一可滚动的容器。滚到边界不把滚轮事件传给背景页。 */
+.cfg-rows {
+  flex: 1 1 auto; min-height: 0;
+  overflow-y: auto; overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent;
+  padding: 4px 0 10px;
+}
+.cfg-rows::-webkit-scrollbar { width: 12px; }
+.cfg-rows::-webkit-scrollbar-track { background: rgba(0, 0, 0, .18); }
+.cfg-rows::-webkit-scrollbar-thumb {
+  background: var(--line-strong); border-radius: 999px;
+  border: 3px solid transparent; background-clip: padding-box;
+}
+.cfg-rows::-webkit-scrollbar-thumb:hover { background: var(--text-3); background-clip: padding-box; }
+
+/* ---- 一行 ----
+   grid: 箭头 18px | 定值 auto | 冒号 8px | 变值 1fr | 尾部 auto */
+.cfg-row {
+  display: grid;
+  /* 第一列 24px：箭头的 18px 命中区 + 6px 列的 gap 一并算进来，箭头右沿离
+     下面的键名正好是一个 gap，看着不会挤成「箭头贴着字」。 */
+  grid-template-columns: 24px minmax(80px, max-content) 8px minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 0 6px;
+  /* 行高：28px 太挤（用户反馈「太挤、看不清」）。定值行实际渲染 30px、
+     容器行 28px 的参差也一并抹平——统一 34px 最小高度 + 上下各 3px 内边距，
+     行距够松，一屏仍能看 10 行左右。 */
+  min-height: 34px;
+  /* 缩进由 JS 写 --cfg-indent（每层 18px），行首基础内边距 10px。
+     用 padding-inline-start 而不是 padding-left，右侧留 12px 给滚动条和尾部按钮。 */
+  padding: 3px 12px 3px calc(10px + var(--cfg-indent, 0px));
+  border-top: 1px solid rgba(46, 56, 80, .35);
+  font: var(--fs-sm)/1.4 var(--font);
+}
+.cfg-row:first-child { border-top: 0; }
+.cfg-row:hover { background: rgba(255, 255, 255, .025); }
+.cfg-row.cfg-group > .cfg-key { color: var(--text); font-weight: 650; }
+.cfg-row.cfg-override { background: rgba(255, 207, 92, .05); }
+
+/* 折叠箭头：空的 <button>，用两段斜边拼出实心三角。
+   为什么不用字形（▸ U+25B8 / ▾ U+25BE）：实测这两个三角码位在 Windows 的
+   字体回退里落到了终端的「报告符号」字体上，12px 时渲染成一团 5x3 的色块、
+   32px 时露出里面的「REC」录像框图案——完全不认。这不是 CSS 能修的。
+   为什么不用边框三角：把 border 三角塞进 .cfg-arrow 的 grid 里会被裁掉半块
+   （实测 5x8 的三角只画出一块 9x6 的楔子，看起来仍像用户说的「减号」）。
+   所以改用两条旋转 45° 的斜线段 + 绝对定位：一条 ↗、一条 ↘，交点在上，
+   天然就是个饱满的实心三角，也不受字体影响。
+   收起 = ▸（两条线朝右收拢），展开 = ▾（整体 rotate(90deg) 朝下）。 */
+.cfg-arrow {
+  position: relative;
+  width: 18px; height: 18px; padding: 0; margin: 0;
+  border: 0; border-radius: 4px; background: transparent;
+  color: var(--text-3); cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+/* 三角本体：8x8 的盒子，两条 2px 斜边，靠 transform 收成药丸状箭头 */
+.cfg-arrow::before,
+.cfg-arrow::after {
+  content: '';
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 2px; height: 8px;
+  border-radius: 1px;
+  background: currentColor;
+  transform-origin: 50% 0;
+  transition: transform 120ms var(--ease);
+}
+/* 一条往右上、一条往右下：顶点在 (50%, 50%-3px)，开口朝左 → 恰好是指右的 ▸ */
+.cfg-arrow::before { transform: translate(-50%, 0) rotate(34deg); }
+.cfg-arrow::after  { transform: translate(-50%, 0) rotate(-34deg); }
+/* 展开：整个箭头绕自身中心转 90° → 开口朝上，变成指下的 ▾ */
+.cfg-arrow[data-open="1"]::before { transform: translate(-50%, 0) rotate(128deg); }
+.cfg-arrow[data-open="1"]::after  { transform: translate(-50%, 0) rotate(52deg); }
+.cfg-arrow:hover { background: var(--bg-elev); color: var(--accent-player); }
+.cfg-arrow:focus-visible { outline: 2px solid var(--accent-player); outline-offset: 1px; }
+.cfg-arrow-spacer { width: 18px; height: 18px; display: block; }
+
+/* 定值（点分键）：等宽字体，长路径省略 */
+.cfg-key {
+  max-width: min(360px, 42vw);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-2); font: var(--fs-xs)/1.5 var(--mono);
+}
+.cfg-colon { color: var(--text-3); text-align: center; }
+
+/* 变值：输入框铺满本列，聚焦时才亮边 */
+.cfg-val { min-width: 0; }
+input.cfg-val {
+  width: 100%; min-width: 0;
+  padding: 3px 8px;
+  border: 1px solid transparent; border-radius: 6px;
+  background: rgba(255, 255, 255, .04);
+  color: var(--text); font: var(--fs-xs)/1.5 var(--mono);
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+input.cfg-val:hover { background: rgba(255, 255, 255, .07); }
+input.cfg-val:focus {
+  outline: none; background: var(--bg-base);
+  border-color: var(--accent-player);
+  box-shadow: 0 0 0 2px rgba(255, 207, 92, .18);
+}
+input.cfg-val.cfg-invalid { border-color: var(--danger); box-shadow: 0 0 0 2px rgba(255, 107, 107, .18); }
+input.cfg-val.cfg-typed-boolean { color: var(--ok); font-weight: 600; }
+input.cfg-val.cfg-typed-number { color: var(--accent-player); }
+input.cfg-val.cfg-typed-null { color: var(--text-3); font-style: italic; }
+
+/* 容器占位：｛…｝/［…］ */
+.cfg-val-container { color: var(--text-3); font: var(--fs-xs)/1.5 var(--mono); }
+.cfg-row.cfg-collapsed > .cfg-val-container { color: var(--text); }
+
+/* 尾部：类型 + 已改徽章 + 撤销 */
+.cfg-tail { display: flex; align-items: center; gap: 5px; justify-self: end; }
+.cfg-type {
+  color: var(--text-3); font: 600 10px/1.6 var(--mono);
+  padding: 0 5px; border-radius: var(--radius-pill); background: rgba(255, 255, 255, .05);
+}
+.cfg-badge {
+  padding: 0 6px; border-radius: var(--radius-pill);
+  background: rgba(255, 207, 92, .18); color: var(--accent-player);
+  font: 700 10px/1.7 var(--font);
+}
+.cfg-undo {
+  padding: 0 6px; border: 1px solid var(--line-strong); border-radius: var(--radius-pill);
+  background: transparent; color: var(--text-3);
+  font: 600 10px/1.6 var(--font); cursor: pointer;
+}
+.cfg-undo:hover { color: var(--danger); border-color: var(--danger); }
+
+/* 只读行（联机 tab 的 kv） */
+.cfg-row.cfg-kv { background: transparent; }
+.cfg-ro {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text); font: var(--fs-xs)/1.5 var(--font);
+}
+.cfg-ro.cfg-mono, .cfg-mono { font-family: var(--mono); }
+
+/* 分节标题 / 提示 / 警告 / 空状态 */
+.cfg-sec-title {
+  margin: 12px 12px 4px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text); font: 700 var(--fs-sm)/1.3 var(--font);
+}
+.cfg-hint { padding: 4px 12px 4px 26px; color: var(--text-3); font: var(--fs-xs)/1.5 var(--font); }
+.cfg-warn {
+  display: flex; align-items: flex-start; gap: 7px;
+  margin: 8px 12px; padding: 8px 10px; border-radius: var(--radius-btn);
+  border: 1px solid rgba(255, 181, 71, .4); background: rgba(255, 181, 71, .08);
+  color: var(--warn); font: var(--fs-xs)/1.5 var(--font);
+}
+.cfg-state {
+  display: flex; align-items: center; gap: 8px; justify-content: center;
+  padding: 28px 12px; color: var(--text-3); font: var(--fs-sm)/1.5 var(--font);
+}
+.cfg-state.fail { color: var(--danger); }
+
+/* 邀请链接块 */
+.cfg-invite { display: flex; align-items: center; gap: 6px; padding: 4px 12px 4px 26px; flex-wrap: wrap; }
+.cfg-invite-name { flex: 1 1 200px; min-width: 120px; }
+.cfg-invite-preview {
+  display: block; margin: 4px 12px 6px 26px; padding: 6px 9px;
+  border-radius: 6px; background: var(--bg-base);
+  color: var(--text-2); font: var(--fs-xs)/1.5 var(--mono);
+  word-break: break-all;
+}
+
+/* 写入成功/失败的 flash 条：贴在弹窗顶部 */
+.cfg-flash { margin: 8px 12px 0; padding: 7px 11px; border-radius: var(--radius-btn); font: 600 var(--fs-xs)/1.5 var(--font); }
+.cfg-flash.ok { color: var(--ok); background: rgba(79, 209, 139, .1); border: 1px solid rgba(79, 209, 139, .35); }
+.cfg-flash.info { color: var(--accent-player); background: rgba(255, 207, 92, .1); border: 1px solid rgba(255, 207, 92, .35); }
+.cfg-flash.danger { color: var(--danger); background: rgba(255, 107, 107, .1); border: 1px solid rgba(255, 107, 107, .35); }
+
+@media (max-width: 760px) {
+  .cfg-shell { grid-template-columns: 1fr; }
+  .cfg-nav { flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--line); }
+  .cfg-nav-item { width: auto; }
+  .cfg-key { max-width: 150px; }
+  .cfg-type { display: none; }
+}

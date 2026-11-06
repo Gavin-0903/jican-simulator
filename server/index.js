@@ -17,6 +17,7 @@ import { WsServer } from './net/WsServer.js';
 import { loadOrCreateIdKey } from './net/IdKey.js';
 import { RoomManager } from './net/RoomManager.js';
 import { createLobbyRouter } from './net/LobbyHttp.js';
+import { LobbyGateway } from './net/LobbyGateway.js';
 import { createConfigAdmin } from './net/ConfigAdmin.js';
 import { applySetup, readSettings, writeSettings } from './persistence/AppSettings.js';
 import { enableServerSource, readOnlineConfig, writeOnlineConfig } from './persistence/OnlineConfig.js';
@@ -83,6 +84,17 @@ export async function startServer(opts = {}) {
   // 联机（需求 3）：本机 ID 密钥 + 房间表；只有「服务器源」实例才挂载大厅路由。
   const idKey = loadOrCreateIdKey(rootDir, { logger });
   const rooms = new RoomManager({ logger });
+  // 联机网关（v0.3）：房间鉴权 + 座位判定（房主=玩家、其余观战）+ 玩家列表。
+  // WsServer 在 upgrade 阶段用它把 /lobby?roomid=&token=… 翻译成角色；HTTP 侧用它渲染玩家列表。
+  // wsRef 先占位：ws 实例在 http 监听之后才建，而 gateway 的 broadcast 需要它（所以要一层间接）。
+  const wsRef = { value: null };
+  const lobby = new LobbyGateway({
+    rooms,
+    controller,
+    logger,
+    // 广播玩家列表：房间成员变化时推到所有已连上的窗口（ws 此刻还没建，用 wsRef 间接引用）
+    broadcast: () => wsRef.value?.broadcastPlayers(),
+  });
   const settings = readSettings(rootDir);
   // 联机（v0.3）：data/config.json 的 online 段由安装期/启动期自动写入；交给 startServer 后
   // 这里是唯一的事实来源（settings.isServerSource 只作为兜底）。
@@ -211,6 +223,10 @@ export async function startServer(opts = {}) {
       controller.setBalance(next.balance);
       Object.assign(config.app, next.app);
       Object.assign(config.llm, next.llm);
+      // online 段（v0.7）：设置页改完默认服务器源地址/token 要立刻反映到联机状态，
+      // 否则 adminInfo 仍报旧值、用户以为没保存成功。就地覆盖以保住 adminInfo/lobbyRouter 持有的引用。
+      const onlineNext = readOnlineConfig(rootDir);
+      Object.assign(onlineState, onlineNext);
       // config.balance 也被别的模块持有（落盘、ws 下行），就地覆盖而不是换引用
       if (config.balance && typeof config.balance === 'object') for (const k of Object.keys(config.balance)) delete config.balance[k];
       if (config.balance && typeof config.balance === 'object') Object.assign(config.balance, next.balance);
@@ -244,6 +260,8 @@ export async function startServer(opts = {}) {
     appInfo: () => ({ version: config.app?.version ?? '', uptime: Math.round(process.uptime()) }),
     requestQuit: () => requestShutdown?.('launcher'),
     configAdmin,
+    lobby,
+    broadcastPlayers: () => wsRef.value?.broadcastPlayers(),
   });
   const stopWatch = watch ? watchBalance(rootDir, (b) => controller.setBalance(b), { logger }) : () => {};
 
@@ -251,7 +269,8 @@ export async function startServer(opts = {}) {
   const actualPort = await listenWithFallback(http, bindHost, port ?? config.app.server.port, config.app.server.portFallbackRange, logger);
   actualPortRef.value = actualPort;
   http.on('request', createHttpHandler({ rootDir, controller, map, host: bindHost, debug: config.app.debug?.endpoints, logger, lobbyRouter, idKey: idKey.key, isServerSource }));
-  const ws = new WsServer({ httpServer: http, controller, app: config.app, port: actualPort, host: bindHost, logger });
+  const ws = new WsServer({ httpServer: http, controller, app: config.app, port: actualPort, host: bindHost, logger, lobby });
+  wsRef.value = ws;
   const shownHost = bindHost === '0.0.0.0' || bindHost === '::' ? 'localhost' : bindHost;
   const url = `http://${shownHost.includes(':') ? `[${shownHost}]` : shownHost}:${actualPort}`;
 
@@ -292,7 +311,7 @@ export async function startServer(opts = {}) {
       }
     }
   };
-  return { url, port: actualPort, controller, gateway, config, close, idKey: idKey.key, idKeyCreated: idKey.created, rooms, isServerSource, settings, online: onlineState, tailscale, adminInfo, refreshTailscaleFacts, readToken: () => ({ token: String(onlineState.token || '') }), shutdownHooks, shutdown: (reason) => requestShutdown(reason ?? 'api') };
+  return { url, port: actualPort, controller, gateway, config, close, idKey: idKey.key, idKeyCreated: idKey.created, rooms, lobby, ws, isServerSource, settings, online: onlineState, tailscale, adminInfo, refreshTailscaleFacts, readToken: () => ({ token: String(onlineState.token || '') }), shutdownHooks, shutdown: (reason) => requestShutdown(reason ?? 'api') };
 }
 
 /** 优先以 960×600 的应用窗口打开（Chrome/Edge），失败则交给系统默认浏览器。 */
