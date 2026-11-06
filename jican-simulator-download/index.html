@@ -282,6 +282,8 @@
     background: rgba(255, 255, 255, .02);
   }
   .file-tags .tag.version { color: var(--accent-2); border-color: rgba(90, 169, 255, .3); }
+  .file-note { margin: 0 0 7px; color: var(--text-2); font-size: 12.5px; }
+  .file-meta .src { color: var(--text-3); }
   .file-meta {
     display: flex;
     flex-wrap: wrap;
@@ -426,7 +428,7 @@
       <section id="downloads">
         <div class="section-head">
           <h2>下载文件<span>DOWNLOAD /</span></h2>
-          <div id="status" class="status"><span class="dot"></span><span id="statusText">正在扫描 download/ …</span></div>
+          <div id="status" class="status"><span class="dot"></span><span id="statusText">正在读取 download.json …</span></div>
         </div>
         <p id="summary" class="summary">正在读取文件列表…</p>
         <div id="fileList" class="file-list"></div>
@@ -454,7 +456,7 @@
   <footer>
     <div class="wrap">
       <span>机惨模拟器 · 下载站 · <span class="ok">builds ready</span></span>
-      <span>文件列表由 download/ 实时扫描 · 清单兜底 files.json</span>
+      <span>下载列表由 download.json 维护 · 版本信息读取 version.json</span>
     </div>
   </footer>
 
@@ -465,9 +467,8 @@
   "use strict";
 
   var FALLBACK_VERSION = { version: "v1.2-dev", channel: "开发版", releasedAt: "", notes: [] };
-  var manifest = [];
-  var manifestMap = {};
-  var scanMeta = null;
+  var downloads = [];
+  var loadError = null;
 
   function $(id) { return document.getElementById(id); }
 
@@ -484,14 +485,6 @@
     var n = bytes;
     while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
     return (n >= 100 || i === 0 ? n.toFixed(0) : n.toFixed(1)) + " " + units[i];
-  }
-
-  function fmtDate(iso) {
-    if (!iso) return "时间未知";
-    var d = new Date(iso);
-    if (isNaN(d.getTime())) return "时间未知";
-    function pad(n) { return String(n).padStart(2, "0"); }
-    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
   }
 
   function detectKind(name) {
@@ -519,42 +512,27 @@
     return match ? match[1] : "";
   }
 
-  function decorate(name, extra) {
-    var info = detectKind(name);
-    var fromManifest = manifestMap[name] || {};
-    var size = (extra && extra.size) || fromManifest.size;
-    var mtime = (extra && extra.mtime) || fromManifest.mtime;
-    return {
-      name: name,
-      size: size,
-      mtime: mtime,
-      sha256: fromManifest.sha256 || "",
-      kind: info.kind,
-      type: info.type,
-      ext: info.ext,
-      platform: platformOf(name),
-      version: versionOf(name)
-    };
-  }
-
-  function fileCard(file, index) {
-    var href = "download/" + encodeURIComponent(file.name);
-    var hashHtml = file.sha256
-      ? '<button class="hash" type="button" data-copy="' + esc(file.sha256) + '" title="点击复制完整 SHA-256">SHA-256 ' + esc(file.sha256.slice(0, 12)) + "…</button>"
+  function itemCard(item, index) {
+    var hashHtml = item.sha256
+      ? '<button class="hash" type="button" data-copy="' + esc(item.sha256) + '" title="点击复制完整 SHA-256">SHA-256 ' + esc(item.sha256.slice(0, 12)) + "…</button>"
       : "";
-    var versionHtml = file.version ? '<span class="tag version">v' + esc(file.version) + "</span>" : "";
+    var hasVersionInTitle = item.version && item.title.toLowerCase().indexOf("v" + item.version.toLowerCase()) !== -1;
+    var versionHtml = item.version && !hasVersionInTitle ? '<span class="tag version">v' + esc(item.version) + "</span>" : "";
+    var sizeHtml = item.size ? "<span>" + esc(fmtSize(item.size)) + "</span>" : "";
+    var noteHtml = item.note ? '<p class="file-note">' + esc(item.note) + "</p>" : "";
     return '<article class="file-card" style="animation-delay:' + (index * 45) + 'ms">' +
-      '<div class="file-icon ' + file.kind + '">' + file.ext + "</div>" +
+      '<div class="file-icon ' + item.kind + '">' + item.ext + "</div>" +
       '<div class="file-body">' +
-        '<h3 class="file-name">' + esc(file.name) + "</h3>" +
-        '<div class="file-tags"><span class="tag">' + esc(file.platform) + "</span>" +
-          '<span class="tag">' + esc(file.type) + "</span>" + versionHtml + "</div>" +
-        '<div class="file-meta"><span>' + esc(fmtSize(file.size)) + "</span>" +
-          "<span>" + esc(fmtDate(file.mtime)) + "</span>" + hashHtml + "</div>" +
+        '<h3 class="file-name">' + esc(item.title) + "</h3>" +
+        '<div class="file-tags"><span class="tag">' + esc(item.platform) + "</span>" +
+          '<span class="tag">' + esc(item.type) + "</span>" + versionHtml + "</div>" +
+        noteHtml +
+        '<div class="file-meta">' + sizeHtml +
+          '<span class="src">' + esc(item.source) + "</span>" + hashHtml + "</div>" +
       "</div>" +
       '<div class="file-actions">' +
-        '<a class="btn primary sm" href="' + href + '" download>下载</a>' +
-        '<button class="btn ghost sm" type="button" data-copy="' + esc(new URL(href, location.href).href) + '">复制链接</button>' +
+        '<a class="btn primary sm" href="' + esc(item.url) + '" target="_blank" rel="noopener noreferrer">下载</a>' +
+        '<button class="btn ghost sm" type="button" data-copy="' + esc(item.url) + '">复制链接</button>' +
       "</div>" +
     "</article>";
   }
@@ -587,11 +565,54 @@
   }
 
   function renderFiles(files) {
-    $("fileList").innerHTML = files.map(fileCard).join("");
+    $("fileList").innerHTML = files.map(itemCard).join("");
   }
 
-  function totalBytes(files) {
-    return files.reduce(function (sum, file) { return sum + (typeof file.size === "number" ? file.size : 0); }, 0);
+  function sourceLabel(url) {
+    try {
+      var host = new URL(url, location.href).hostname.toLowerCase();
+      if (host.indexOf("ghproxy") !== -1 || host.indexOf("gh-proxy") !== -1) return "加速镜像 · GitHub Release";
+      if (host.indexOf("github.com") !== -1) return "GitHub Release";
+      if (host.indexOf("gitee.com") !== -1) return "Gitee Release";
+      return host || "外部链接";
+    } catch (error) {
+      return "外部链接";
+    }
+  }
+
+  function normalizeDownloads(data) {
+    var items = [];
+    function push(item) { if (item) items.push(item); }
+    if (Array.isArray(data)) {
+      data.forEach(function (entry) {
+        if (typeof entry === "string") push({ title: entry, url: entry });
+        else if (entry && typeof entry === "object") push(entry);
+      });
+    } else if (data && typeof data === "object") {
+      Object.keys(data).forEach(function (key) {
+        var value = data[key];
+        if (typeof value === "string") push({ title: key, url: value });
+        else if (value && typeof value === "object") push(Object.assign({ title: key }, value));
+      });
+    }
+    return items.map(function (item) {
+      var title = String(item.title || item.name || "未命名下载");
+      var url = String(item.url || item.href || item.link || "");
+      var info = detectKind(url || title);
+      return {
+        title: title,
+        url: url,
+        size: typeof item.size === "number" ? item.size : undefined,
+        sha256: item.sha256 || "",
+        note: item.note || item.desc || "",
+        platform: item.platform || platformOf(title + " " + url),
+        kind: info.kind,
+        type: item.type || info.type,
+        ext: info.ext,
+        version: item.version || versionOf(title),
+        source: sourceLabel(url)
+      };
+    }).filter(function (item) { return !!item.url; });
   }
 
   async function fetchJson(url) {
@@ -609,66 +630,14 @@
     }
   }
 
-  async function loadManifest() {
+  async function loadDownloads() {
     try {
-      var data = await fetchJson("files.json");
-      if (data && Array.isArray(data.files)) {
-        manifest = data.files;
-        manifestMap = {};
-        manifest.forEach(function (file) { manifestMap[file.name] = file; });
-      }
+      var data = await fetchJson("download.json");
+      downloads = normalizeDownloads(data);
     } catch (error) {
-      manifest = [];
+      downloads = [];
+      loadError = error;
     }
-  }
-
-  async function scanDownloadDir() {
-    var base = new URL("download/", location.href);
-    var res = await fetch(base.href, { cache: "no-store" });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    var html = await res.text();
-    var doc = new DOMParser().parseFromString(html, "text/html");
-    var names = [];
-    var seen = {};
-    Array.prototype.forEach.call(doc.querySelectorAll("a[href]"), function (anchor) {
-      var href = anchor.getAttribute("href") || "";
-      if (!href || /^[?#]/.test(href) || href.indexOf("..") === 0) return;
-      var url;
-      try { url = new URL(href, base); } catch (error) { return; }
-      if (url.origin !== location.origin) return;
-      if (url.pathname.indexOf(base.pathname) !== 0) return;
-      var rest = decodeURIComponent(url.pathname.slice(base.pathname.length));
-      if (!rest || rest.slice(-1) === "/" || rest.indexOf("/") !== -1) return;
-      if (!seen[rest]) { seen[rest] = true; names.push(rest); }
-    });
-    return names.sort(function (a, b) { return a.localeCompare(b, "zh-CN"); });
-  }
-
-  async function headMeta(name) {
-    try {
-      var url = "download/" + encodeURIComponent(name);
-      var res = await fetch(url, { method: "HEAD", cache: "no-store" });
-      if (!res.ok) return null;
-      var size = Number(res.headers.get("content-length"));
-      var modified = res.headers.get("last-modified");
-      return {
-        size: isFinite(size) && size > 0 ? size : undefined,
-        mtime: modified ? new Date(modified).toISOString() : undefined
-      };
-    } catch (error) {
-      return null;
-    }
-  }
-
-  async function hydrate(names) {
-    var metas = await Promise.all(names.map(headMeta));
-    var files = names.map(function (name, index) { return decorate(name, metas[index]); });
-    files.sort(function (a, b) {
-      var am = a.mtime ? Date.parse(a.mtime) : 0;
-      var bm = b.mtime ? Date.parse(b.mtime) : 0;
-      return (bm - am) || a.name.localeCompare(b.name, "zh-CN");
-    });
-    return files;
   }
 
   function renderEmpty(boxHtml) {
@@ -677,65 +646,45 @@
   }
 
   async function boot() {
-    await Promise.all([loadVersion(), loadManifest()]);
+    await Promise.all([loadVersion(), loadDownloads()]);
 
     if (location.protocol === "file:") {
-      setStatus("file:// 下无法读取目录", "err");
-      $("summary").textContent = "浏览器安全策略禁止页面通过 file:// 列举本地文件。";
+      setStatus("file:// 下无法读取 download.json", "err");
+      $("summary").textContent = "浏览器安全策略禁止页面通过 file:// 读取本地 JSON。";
       renderEmpty(
         "<strong>请通过 HTTP 服务器打开本页</strong>" +
         "<p>在 jican-simulator-download 目录下运行 <code>python -m http.server 8000</code>，然后访问 " +
-        "<code>http://localhost:8000/</code>。这样 index.html 才能实时扫描 download/ 目录。</p>"
+        "<code>http://localhost:8000/</code>。</p>"
       );
       return;
     }
 
-    var scanError = null;
-    var names = [];
-    try {
-      names = await scanDownloadDir();
-      scanMeta = { count: names.length };
-    } catch (error) {
-      scanError = error;
-    }
-
-    if (!scanError) {
-      var files = await hydrate(names);
-      setStatus(files.length ? "已实时扫描 download/" : "download/ 目录为空", files.length ? "ok" : "warn");
-      $("summary").textContent = files.length
-        ? "共 " + files.length + " 个文件 · 合计 " + fmtSize(totalBytes(files)) + " · 来源：目录实时扫描"
-        : "来源：目录实时扫描";
-      if (files.length) {
-        $("emptyState").classList.add("hidden");
-        renderFiles(files);
-      } else {
-        renderEmpty(
-          "<strong>download/ 目录还是空的</strong>" +
-          "<p>把安装包（.exe / .zip 等）放进 download/ 文件夹后刷新本页即可，列表会自动出现。</p>"
-        );
-      }
+    if (loadError) {
+      setStatus("无法读取 download.json", "err");
+      $("summary").textContent = "读取或解析 download.json 失败。";
+      renderEmpty(
+        "<strong>download.json 读取失败</strong>" +
+        "<p>" + esc(String(loadError.message || loadError)) + "</p>" +
+        "<p>请确认 download.json 与 index.html 在同一目录，且内容是合法 JSON。</p>"
+      );
       return;
     }
 
-    if (manifest.length) {
-      var listed = await hydrate(manifest.map(function (file) { return file.name; }));
-      // 清单中的文件优先，若目录扫描失败则以清单为准
-      setStatus("目录不可列举，已读取 files.json", "warn");
-      $("summary").textContent = "共 " + listed.length + " 个文件 · 合计 " + fmtSize(totalBytes(listed)) +
-        " · 来源：files.json 清单（服务器未开启目录浏览）";
-      $("emptyState").classList.add("hidden");
-      renderFiles(listed);
+    if (!downloads.length) {
+      setStatus("download.json 里还没有条目", "warn");
+      $("summary").textContent = "来源：download.json（空）";
+      renderEmpty(
+        "<strong>download.json 还是空的</strong>" +
+        "<p>在 download.json 里按「名称: 下载链接」添加条目后刷新本页即可，例如：</p>" +
+        "<pre>{ &quot;机惨模拟器-Win10满血版-v1.2dev&quot;: &quot;https://github.com/…/file.exe&quot; }</pre>"
+      );
       return;
     }
 
-    setStatus("无法读取文件列表", "err");
-    $("summary").textContent = "目录扫描失败，且没有找到 files.json 清单。";
-    renderEmpty(
-      "<strong>无法读取 download/ 目录</strong>" +
-      "<p>当前服务器没有开启目录浏览（返回 " + esc(String(scanError && scanError.message || "错误")) + "）。" +
-      "请在站点根目录运行 <code>node scan-downloads.mjs</code> 生成 files.json 清单后刷新；" +
-      "或改用支持目录浏览的静态服务器（如 <code>python -m http.server</code>）。</p>"
-    );
+    setStatus("已读取 download.json", "ok");
+    $("summary").textContent = "共 " + downloads.length + " 个下载 · 来源：download.json";
+    $("emptyState").classList.add("hidden");
+    renderFiles(downloads);
   }
 
   var toastTimer = null;
