@@ -383,6 +383,9 @@ export class GameController extends EventEmitter {
       const payload = target.key == null || !target.characterId ? this.gameover : { ...this.gameover, playerCharId: target.characterId };
       this.emitTo(target, MSG.GAMEOVER, payload);
     }
+    // 通知大厅网关：这一局已经结算，开始「结算后 120 秒自动离开/删房」的倒计时。
+    // 单机局没有房间上下文，LobbyGateway 的 activeRoomId 为空，不会启动计时。
+    this.emit('gameover', this.gameover);
     // 先给出模板小结；LLM 可用时异步生成更自然的版本再覆盖
     if (this.gateway?.available) {
       const ref = this.gameover;

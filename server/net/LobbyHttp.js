@@ -64,7 +64,7 @@ function joinOrReturn(rooms, u, username) {
 export function crossOriginOk(res) {
   res.setHeader('access-control-allow-origin', '*');
   res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
-  res.setHeader('access-control-allow-headers', 'content-type');
+  res.setHeader('access-control-allow-headers', 'content-type, x-jican-client');
 }
 
 /**
@@ -96,6 +96,8 @@ export function createLobbyRouter({
   // 只实现这两个控制端点，别的什么都不暴露；quit 还要求请求来自回环地址 + launcher 标记头。
   appInfo = null,
   requestQuit = null,
+  // 自动更新（v1.2）：检查/下载/安装三个动作都会联网或执行文件，全部只对本机开放。
+  updater = null,
   // 服务端配置读写（v0.6）：configAdmin 由 server/index.js 组装（校验 + 落盘 + 热生效 + 推送 balance），
   // 本模块只负责路由与错误码映射。接口形状：describe() → GET 响应体，apply(body)/reset(body) → { ok, ... }。
   configAdmin = null,
@@ -477,6 +479,57 @@ export function createLobbyRouter({
       send(res, 200, { ok: true });
       // 先把响应发出去再关停，否则宿主侧会看到连接被重置
       setTimeout(() => { try { requestQuit(); } catch { /* 忽略 */ } }, 30);
+      return true;
+    }
+    // ---- 自动更新（v1.2）：检查 / 下载 / 安装
+    // 三个动作都会联网或执行安装包，所以统一只认回环地址：局域网与 Funnel 进来的请求一律 403。
+    if (path === '/api/update/check' || path === '/api/update/status') {
+      if (!isLoopback(req.socket?.remoteAddress)) {
+        send(res, 403, { ok: false, error: '只允许本机调用' });
+        return true;
+      }
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        send(res, 405, { ok: false, error: '只接受 GET' });
+        return true;
+      }
+      if (!updater) {
+        send(res, 200, { ok: true, enabled: false, message: '本实例未启用自动更新' });
+        return true;
+      }
+      const force = path === '/api/update/check' && new URL(req.url, 'http://x').searchParams.get('force') === '1';
+      Promise.resolve()
+        .then(() => (path === '/api/update/status' ? updater.status() : updater.check({ force })))
+        .then((out) => send(res, 200, { ok: true, ...out }))
+        .catch((err) => send(res, 500, { ok: false, error: String(err && err.message ? err.message : err) }));
+      return true;
+    }
+    if (path === '/api/update/download' || path === '/api/update/install') {
+      if (!isLoopback(req.socket?.remoteAddress)) {
+        send(res, 403, { ok: false, error: '只允许本机调用' });
+        return true;
+      }
+      if (req.method !== 'POST') {
+        send(res, 405, { ok: false, error: '只接受 POST' });
+        return true;
+      }
+      if (!updater) {
+        send(res, 501, { ok: false, error: '本实例未启用自动更新' });
+        return true;
+      }
+      // 吞掉请求体（可能带 {}），避免 keep-alive 下残留数据污染下一个请求
+      req.on('data', () => {});
+      if (path === '/api/update/download') {
+        // 后台下载：立刻回 202，前端轮询 /api/update/status 拿进度
+        send(res, 202, { ok: true, phase: 'downloading' });
+        Promise.resolve()
+          .then(() => updater.download())
+          .catch((err) => logger.warn?.('[update] 下载失败：' + String(err && err.message ? err.message : err)));
+        return true;
+      }
+      Promise.resolve()
+        .then(() => updater.install())
+        .then((out) => send(res, 200, { ok: true, ...out }))
+        .catch((err) => send(res, 500, { ok: false, error: String(err && err.message ? err.message : err) }));
       return true;
     }
     if (path === '/api/net/room') {

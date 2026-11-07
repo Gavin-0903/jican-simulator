@@ -136,6 +136,9 @@
   font: var(--fs-sm)/1.4 var(--font);
 }
 .cfg-row:first-child { border-top: 0; }
+/* 折叠靠 row.hidden 控制，但上面的 display:grid 优先级高于 UA 的 [hidden]{display:none}，
+   不补这一条的话点箭头只会转方向、行不消失（用户报的「无法折叠」）。 */
+.cfg-row[hidden] { display: none; }
 .cfg-row:hover { background: rgba(255, 255, 255, .025); }
 .cfg-row.cfg-group > .cfg-key { color: var(--text); font-weight: 650; }
 .cfg-row.cfg-override { background: rgba(255, 207, 92, .05); }
@@ -206,6 +209,24 @@ input.cfg-val.cfg-invalid { border-color: var(--danger); box-shadow: 0 0 0 2px r
 input.cfg-val.cfg-typed-boolean { color: var(--ok); font-weight: 600; }
 input.cfg-val.cfg-typed-number { color: var(--accent-player); }
 input.cfg-val.cfg-typed-null { color: var(--text-3); font-style: italic; }
+
+/* 枚举项（online.mode / online.tailscale.expose）：和输入框同款外观的下拉框 */
+select.cfg-val {
+  width: 100%; min-width: 0;
+  padding: 3px 8px;
+  border: 1px solid transparent; border-radius: 6px;
+  background: rgba(255, 255, 255, .04);
+  color: var(--text); font: var(--fs-xs)/1.5 var(--mono);
+  cursor: pointer;
+}
+select.cfg-val:hover { background: rgba(255, 255, 255, .07); }
+select.cfg-val:focus {
+  outline: none; background: var(--bg-base);
+  border-color: var(--accent-player);
+  box-shadow: 0 0 0 2px rgba(255, 207, 92, .18);
+}
+select.cfg-val.cfg-invalid { border-color: var(--danger); box-shadow: 0 0 0 2px rgba(255, 107, 107, .18); }
+select.cfg-val option { background: var(--bg-base); color: var(--text); }
 
 /* 容器占位：｛…｝/［…］ */
 .cfg-val-container { color: var(--text-3); font: var(--fs-xs)/1.5 var(--mono); }

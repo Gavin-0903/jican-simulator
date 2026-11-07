@@ -46,25 +46,34 @@ function maskToken(token) {
 /** 完整 token 的唯一判据：256 位十六进制。复制提示语前必须过这一关，绝不复制半截。 */
 const FULL_TOKEN = /^[0-9a-fA-F]{256}$/;
 
+/** 上一次用 window.open 打开的房间窗口地址（sessionStorage）：大厅窗口刷新后还能「打开房间窗口」。 */
+export const ROOM_WINDOW_KEY = 'jican.roomWindow';
+
 /**
  * 拼「复制房间提示语」的 6 行文本（房主发给同学的入房说明）。
  *
- * 两个硬约束（任务要求）：
+ * 模板来自用户原话（m00599）：「大家好我是{Name}，我创建了一个房间：服务器源：… / 服务器token: …
+ * / 房间号：… / 邀请码：…」——名字由房主名兜底，服务器源由调用方换成本机可被访问的地址。
+ *
+ * 两个硬约束：
  *   · token 必须是**完整明文**（房主把整串贴给同学，同学粘进「高级」区的 Token 框）；
- *   · 格式与换行严格 6 行，不准多不准少——调用方负责先校验 token，这里再兜一次底：
- *     如果拿到的 token 不合法就返回空串，绝不产出带半截 token 的文案。
+ *     不合法就返回空串，绝不产出带半截 token 的文案；
+ *   · **绝不包含 ID 密钥**（别人拿到能冒充房主身份）：这个函数的参数里根本没有 idKey。
  */
-export function roomNoticeText({ roomId, token, invCode }) {
+export function roomNoticeText({ name, roomId, token, invCode, origin }) {
+  const who = String(name ?? '').trim();
   const rid = String(roomId ?? '').trim();
   const tk = String(token ?? '').trim();
   const iv = String(invCode ?? '').trim();
+  const src = String(origin ?? '').trim().replace(/\/+$/, '');
   if (!FULL_TOKEN.test(tk)) return '';
   return [
-    '大家好，这是我创建的房间，想要加入的可以依空填入以下信息：',
+    who ? `大家好我是${who}，我创建了一个房间：` : '大家好，我创建了一个房间：',
+    `服务器源：${src || '（未配置，进联机页「高级」查看）'}`,
+    `服务器token: ${tk}`,
     `房间号：${rid}`,
-    `token：${tk}(复制后是完整256位)`,
-    `邀请码：${iv}`,
-    '你的用户名可以自定义也可以默认。',
+    `邀请码：${iv || '（无）'}`,
+    '加入方式：打开联机页 →「高级」里填服务器源和 Token → 再用房间号与邀请码进房。',
   ].join('\n');
 }
 
@@ -97,6 +106,12 @@ export class NetPanel {
     this.error = ''; // 原样展示的错误文本（含状态码）
     this.info = null; // { ok, origin, name, rooms, idKeyHint } | { ok:false, error }
     this.joined = null; // 最近一次成功进入的房间快照 { roomId, token, invCode, role, landed, blocked, openUrl, inviteUrl, members }
+    // 房间页「开始游戏」与大厅底部「打开房间窗口」的接线：房间状态归 main.js 的 roomState，
+    // NetPanel 只负责画按钮/转发点击，避免两处各自维护一份「是不是房主、开局没有」。
+    this.startInfo = null; // () => ({ isOwner, started, busy })
+    this.onStartGame = null; // () => void
+    this.onRoomChange = null; // (joined|null) => void：进/离房时让大厅重画底部按钮
+    this.onModeChange = null; // (mode) => void：单机/联机切换时让大厅重画
     this.players = []; // 大厅在线玩家
     this.playersFallback = false; // true = /api/lobby/players 未落地，数据来自 rooms.list 汇总
     this.playersLoaded = false;
@@ -115,6 +130,7 @@ export class NetPanel {
     this.tokenDefaulted = false;
     this.usernameDefaulted = false;
     this.copySeq = 0; // 复制老失败的兜底提示用
+    this.tailscaleUrl = ''; // 本机 TailScale 公开地址（https://xxx.ts.net）；分享文案里换掉 127.0.0.1 用
     void this.refresh(); // refresh 内部会先取 ID 密钥，再探测、自动填入
   }
 
@@ -134,6 +150,7 @@ export class NetPanel {
     // ID 密钥要先取：高级区「ID 密钥」一行显示的是 this.idKey，取晚了会先渲染成「未读到」再闪一下。
     this.idKey = (await this.#loadIdKey()) || this.idKey;
     await this.#probe();
+    this.tailscaleUrl = (await this.#loadTailscaleUrl()) || this.tailscaleUrl;
     await this.#autofillFromConfig();
     await this.#loadPlayers();
     void this.#measureLatency();
@@ -339,6 +356,44 @@ export class NetPanel {
     return String(raw ?? '').trim().replace(/\/+$/, '');
   }
 
+  /**
+   * 本机 TailScale 的公开地址（https://xxx.ts.net）。
+   * 只在本机是服务器源时有意义：/api/net/admin 在跨机器访问时是 403，失败一律静默返回空串。
+   * 优先 tailscale.url（服务端已拼好 https://dnsName），退一步用 dnsName 自己拼。
+   */
+  async #loadTailscaleUrl() {
+    try {
+      const res = await fetch('/api/net/admin', { cache: 'no-store' });
+      if (!res.ok) return '';
+      const body = await res.json().catch(() => null);
+      const ts = body?.tailscale || {};
+      let url = String(ts.url || '').trim();
+      if (!url && ts.dnsName) url = 'https://' + String(ts.dnsName).trim();
+      if (!/^https:\/\//i.test(url)) return '';
+      return url.replace(/\/+$/, '');
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * 分享文案里的服务器源：本机地址（127.0.0.1 / localhost / [::1]）同学根本连不上，
+   * 所以本机当服务器源时自动换成 TailScale 的 https://xxx.ts.net；拿不到就原样返回。
+   * 客户端模式连的是别人的公网/局域网地址，不动。
+   */
+  #shareOrigin() {
+    const raw = this.activeOrigin;
+    if (!raw) return '';
+    let host = '';
+    try {
+      host = new URL(raw).hostname.toLowerCase();
+    } catch {
+      return raw;
+    }
+    const local = host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]' || host === '0.0.0.0';
+    return local && this.tailscaleUrl ? this.tailscaleUrl : raw;
+  }
+
   // ────────────────────────────────────────────────────────────── 大厅玩家列表
   /**
    * 「在线玩家（n）」的数据源三级降级：
@@ -484,10 +539,25 @@ export class NetPanel {
       invcode: invCode,
       username: this.username,
     });
-    const openUrl = `${origin}/?${q.toString()}`;
+    // 纯网页版：房间窗口还是这个网页（file:// 下的本页），带上 src= 服务器源，由页面自己连远端 /lobby。
+    const webShell = globalThis.__JICAN_WEB__;
+    if (webShell && typeof webShell.saveSetting === 'function') {
+      webShell.saveSetting('source', origin);
+      webShell.saveSetting('token', this.token);
+    }
+    const openUrl = (webShell && typeof webShell.roomUrl === 'function')
+      ? webShell.roomUrl(origin, q)
+      : `${origin}/?${q.toString()}`;
     // 邀请链接是「页面链接」（点开就是联机页），不是 /api/net/join 的 JSON 链接
     let inviteUrl = buildInviteUrl({ origin, token: this.token, idKey: this.idKey, username: '' });
     if (!inviteUrl) inviteUrl = `${origin}/?token=${encodeURIComponent(this.token)}&id=${encodeURIComponent(this.idKey)}&type=join`;
+    // 先落 marker 再 window.open：新窗口连上服务器的速度可能快过 window.open 返回，
+    // 之前放后面会让大厅窗口在这几毫秒里被当成普通大厅页，收到 spectator 横幅后再也不消失。
+    try {
+      sessionStorage.setItem(ROOM_WINDOW_KEY, openUrl);
+    } catch {
+      /* 隐私模式：忽略 */
+    }
     let landed = false;
     try {
       const win = window.open(openUrl, '_blank', 'width=1200,height=760');
@@ -518,6 +588,7 @@ export class NetPanel {
     this.render();
     void this.#refreshRoom();
     void this.#loadPlayers();
+    this.onRoomChange?.(this.joined);
   }
 
   /** 进房后定时刷新成员（GET /api/net/room?roomid=）。房间没了就提示原样错误，不清状态。 */
@@ -544,8 +615,14 @@ export class NetPanel {
     this.joined = null;
     this.roomError = '';
     this.notice = '已离开房间：关掉那个游戏窗口就彻底退出了';
+    try {
+      sessionStorage.removeItem(ROOM_WINDOW_KEY);
+    } catch {
+      /* 隐私模式：忽略 */
+    }
     this.render();
     void this.#loadPlayers();
+    this.onRoomChange?.(null);
   }
 
   // ────────────────────────────────────────────────────────────── 渲染
@@ -556,13 +633,15 @@ export class NetPanel {
     // 切换控件在房间页上整块不画（用户原话：「新的联机窗口去掉单机/联机按钮，因为那是联机窗口肯定是联机」）。
     // 用「不调用 h()」而不是 hidden：留一个 display:none 的按钮，读屏与 tab 键序里它还在。
     const seg = this.roomPage ? null : h('div.segmented.net-mode', { role: 'group', 'aria-label': '游戏模式' },
-      h('button', { 'aria-pressed': String(isSolo), onclick: () => { this.mode = 'solo'; this.render(); } }, icon('user', 'sm'), '单机'),
+      h('button', { 'aria-pressed': String(isSolo), onclick: () => { this.mode = 'solo'; this.render(); this.onModeChange?.('solo'); } }, icon('user', 'sm'), '单机'),
       h('button', {
         'aria-pressed': String(!isSolo),
         onclick: () => {
           this.mode = 'net';
           this.playersLoaded = false;
           this.render();
+          // 大厅底部的主按钮要跟着切成「打开房间窗口」，所以模式变化必须通知大厅重画。
+          this.onModeChange?.('net');
           // 每次切到联机都重探一次（本机角色可能刚变），自动填入只做一次
           void this.refresh();
         },
@@ -597,6 +676,12 @@ export class NetPanel {
       // 并把对应的徽标元素一并藏掉——state 里的 Defaulted 标记也清掉，下次重渲染就不会再出现。
       oninput: (e) => {
         this[key] = e.target.value;
+        try {
+          const webShell = globalThis.__JICAN_WEB__;
+          if (webShell && typeof webShell.saveSetting === 'function') {
+            webShell.saveSetting(key === 'origin' ? 'source' : key, e.target.value);
+          }
+        } catch { /* 纯网页版以外的环境没有这个钩子 */ }
         if (this[defaultedKey] && String(e.target.value).trim() !== '') {
           this[defaultedKey] = false;
           e.target.removeAttribute('data-defaulted');
@@ -645,7 +730,38 @@ export class NetPanel {
           }, icon('user', 'sm'), '选座 / 换座位'),
           h('span.net2-hint.quiet', { text: '自己的座位随时能换；已被别人坐的格子会显示是谁、且不能点。' }))
         : null,
+      this.#startBlock(),
       this.#playersList());
+  }
+
+  /**
+   * 房间页的「开始游戏」：房主可点，成员/观战者永远禁用（等房主开局）。
+   *
+   * 状态不在这里存：main.js 把 roomState 的 isOwner/started/busy 通过 startInfo 注进来，
+   * 点击再回 main.js 的 doStartGame（走 POST /api/lobby/room/start），不另开第二条开局链路。
+   * 房间页之前把开局按钮藏在大厅 overlay 下面的房间面板里，用户在这个窗口里根本点不到。
+   */
+  #startBlock() {
+    if (typeof this.startInfo !== 'function') return null;
+    const st = this.startInfo() || {};
+    const owner = st.isOwner === true;
+    const started = st.started === true;
+    const busy = st.busy === true;
+    const canStart = owner && !started && !busy;
+    const label = started ? '游戏已开始' : busy ? '正在开始…' : '开始游戏';
+    const hint = started
+      ? '这一局已经开始，房间已锁定，等这局结束。'
+      : owner
+        ? '只有你能点：按当前座位和参数开始这一局，已选座位的人会一起进游戏。'
+        : '只有房主能开始游戏；你可以先选/换座位，等房主开始。';
+    return h('div.net2-roompage-start', {},
+      h('button.btn.primary', {
+        type: 'button',
+        disabled: !canStart,
+        title: started ? '这一局已经开始' : owner ? '开始这一局' : '只有房主可以开始游戏',
+        onclick: () => { if (canStart) void this.onStartGame?.(); },
+      }, icon('play', 'sm'), label),
+      h('div.net2-hint.quiet', { text: hint }));
   }
 
   #netBody() {
@@ -831,7 +947,15 @@ export class NetPanel {
    */
   #noticeCopy(j) {
     const tokenOk = FULL_TOKEN.test(String(j.token ?? ''));
-    const text = roomNoticeText({ roomId: j.roomId, token: j.token, invCode: j.invCode });
+    // 名字用房主名（= 创建者），服务器源自动从 127.0.0.1 换成 TailScale 地址；不含 ID 密钥。
+    const noticeArgs = (room) => ({
+      name: room.owner || this.username,
+      roomId: room.roomId,
+      token: room.token,
+      invCode: room.invCode,
+      origin: this.#shareOrigin(),
+    });
+    const text = roomNoticeText(noticeArgs(j));
     return h('div.net2-copy',
       h('div.net2-copyrow', {},
         h('button.btn.sm', {
@@ -843,8 +967,8 @@ export class NetPanel {
               this.render();
               return;
             }
-            // .trim()：模板本身就是 5 行文本 + 末尾换行，去掉尾部空白保证行数/长度判定干净
-            const body = roomNoticeText({ roomId: this.joined.roomId, token: tk, invCode: this.joined.invCode }).trim();
+            // .trim()：去掉尾部空白，保证行数/长度判定干净
+            const body = roomNoticeText(noticeArgs(this.joined)).trim();
             if (!body) {
               this.error = 'Token 不是完整的 256 位，请到高级区重新读取';
               this.render();
@@ -854,7 +978,7 @@ export class NetPanel {
             this.copyText(body, '房间提示语');
           },
         }, icon('book', 'sm'), '复制房间提示语'),
-        h('span.net2-hint.quiet', { text: tokenOk ? '含完整 256 位 token，可直接发给同学' : 'Token 不完整，请到高级区重新读取' })),
+        h('span.net2-hint.quiet', { text: tokenOk ? '含完整 256 位 token 与服务器源，不含 ID 密钥' : 'Token 不完整，请到高级区重新读取' })),
       // 注意：dom.js 的 h() 对字符串 props 一律走 setAttribute，而 textarea 的内容不在文本节点里
       // （写在子节点里根本不显示），所以这里把文案当**子节点文本**传进去，不用 text prop。
       h('textarea.input.net2-copytext', {
@@ -931,21 +1055,34 @@ export class NetPanel {
   #reopenUrl() {
     const joined = this.joined;
     if (joined?.openUrl) return String(joined.openUrl);
+    // 大厅窗口刷新后 joined 没了，但上次打开过的窗口地址还在 sessionStorage 里。
+    let saved = '';
+    try {
+      saved = sessionStorage.getItem(ROOM_WINDOW_KEY) || '';
+    } catch {
+      /* 隐私模式：忽略 */
+    }
     const cred = parseRoomQuery(location.search);
+    // 必须真的有一间房：这个按钮是「回到那间房」，不是「用当前身份开个新窗口」。
+    // 没有 roomid 时 this.token / this.idKey 也可能有默认值，不能拿来当「进过房间」的证据。
+    const roomId = cred.roomid || joined?.roomId || this.roomId || '';
+    if (!roomId) return saved;
     const token = cred.token || joined?.token || this.token || '';
     const id = cred.id || this.idKey || '';
-    if (!token || !id) return '';
+    if (!token || !id) return saved;
     const q = new URLSearchParams();
     q.set('token', token);
     q.set('id', id);
     q.set('type', cred.type || joined?.type || 'join');
-    const roomId = cred.roomid || joined?.roomId || this.roomId || '';
     const invCode = cred.invcode || joined?.invCode || this.invCode || '';
     const username = cred.username || joined?.username || this.username || '';
     if (roomId) q.set('roomid', roomId);
     if (invCode) q.set('invcode', invCode);
     if (username) q.set('username', username);
-    return `${this.activeOrigin}/?${q.toString()}`;
+    const webShell = globalThis.__JICAN_WEB__;
+    return (webShell && typeof webShell.roomUrl === 'function')
+      ? webShell.roomUrl(this.activeOrigin, q)
+      : `${this.activeOrigin}/?${q.toString()}`;
   }
 
   /** 高级区那一行：按钮 + 一句说明（说明随能不能拼出地址变化，别让按钮凭空消失却没解释）。 */
@@ -999,6 +1136,11 @@ export class NetPanel {
     // 所以没 joined 的场合补一个只含链接的小条（复用 .net2-blocked 的外观）。
     this.reopenBlockedUrl = landed ? '' : url;
     this.render();
+  }
+
+  /** 大厅底部「打开房间窗口」是否可用：必须有一间房（joined / 地址栏 roomid / 上次打开的窗口地址）。 */
+  canReopen() {
+    return Boolean(this.#reopenUrl());
   }
 
   /** 「高级」折叠区：服务器源地址 / Token / ID 密钥 / 用户名。默认收起。 */

@@ -138,6 +138,47 @@ test('claimSeat：还没被审批的人不能选座位（NOT_MEMBER），已开�
   });
 });
 
+test('resolve：ws 直连进房（没走 HTTP /api/net/join）也补绑身份 —— 审批后能自己选座，选完座位就是控制端', async () => {
+  await withRoomControl(async ({ post, room, ownerKey, rooms, lobby }) => {
+    const guestKey = makeKey(75);
+    // 移动端 / 点邀请链接的真实形状：前端只连 /lobby 一条 ws，不调 /api/net/join。
+    // 老实现里 resolve 的 join 分支在 pending / member 两处都提前 return，跳过 usernames.set，
+    // 于是服务端不知道 guestKey 是「客人」，选座被判成「只有房主可以替别人安排座位」403 —— 用户报的
+    // 「联机时移动端无法选择位置」。这里钉死：握手阶段就要把身份记进房间身份表。
+    const qs = `?type=join&roomid=${room.id}&token=${room.token}&invcode=${room.invCode}&id=${guestKey}&username=${encodeURIComponent('客人')}`;
+    const hello = lobby.resolve(qs);
+    assert.equal(hello.ok, true);
+    assert.equal(hello.pending, true, '还没审批：先挂申请队列');
+    assert.equal(rooms.identityOf(room, guestKey), '客人', '握手阶段就补绑 idKey → username');
+
+    rooms.approve(room.id, ownerKey, '客人');
+    const self = await post('/api/lobby/room/seat', { roomid: room.id, id: guestKey, characterId: 's1-02' });
+    assert.equal(self.status, 200, JSON.stringify(self.body));
+    assert.equal(self.body.username, '客人', '服务端必须自己认出操作者是谁');
+    assert.equal(room.seats.get('客人'), 's1-02');
+
+    // 第二半：座位判定 isSeat 也依赖同一张表 —— 不补绑的话成员重连后永远被当成观战者，
+    // 房主开局了他也收不到私有包（用户报的「成员没有开始游戏」）。
+    const again = lobby.resolve(qs);
+    assert.equal(again.seat, true, '选完座位重连必须是控制端');
+    assert.equal(again.role, 'controller');
+  });
+});
+
+test('resolve：ws 直连不抢别人已经认领的用户名（拿邀请链接也顶不了座）', async () => {
+  await withRoomControl(async ({ room, ownerKey, rooms, lobby }) => {
+    const guestKey = makeKey(76);
+    rooms.join({ idKey: guestKey, username: '客人', roomId: room.id, token: room.token, invCode: room.invCode });
+    rooms.approve(room.id, ownerKey, '客人');
+
+    const thiefKey = makeKey(77);
+    const out = lobby.resolve(`?type=join&roomid=${room.id}&token=${room.token}&invcode=${room.invCode}&id=${thiefKey}&username=${encodeURIComponent('客人')}`);
+    assert.equal(out.ok, true);
+    assert.equal(rooms.identityOf(room, thiefKey), null, '别人的名字不许被抢绑');
+    assert.equal(rooms.identityOf(room, guestKey), '客人', '原绑定不动');
+  });
+});
+
 test('claimSeat：同一个角色不能被两个人同时坐（SEAT_TAKEN），本人重复选同一个座位是幂等的', async () => {
   await withRoomControl(async ({ post, room, ownerKey, rooms }) => {
     const guestKey = makeKey(74);

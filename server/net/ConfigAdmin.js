@@ -424,7 +424,9 @@ export function buildJsonTree(rootDir, { sampleDir, merged = false } = {}) {
 function readEffectiveForTree(rootDir, warnings) {
   try {
     const cfg = loadConfig(rootDir, { logger: { info() {}, warn() {}, error() {} } });
-    return { app: cfg.app, llm: cfg.llm, balance: cfg.balance };
+    // online 段的真实生效值来自 data/config.json（不是 config/default.json + override）：
+    // 不同步的话 JSON 树里 online.serverUrl 永远是空串，用户改完也以为没生效。
+    return { app: { ...cfg.app, online: readOnlineConfig(rootDir) }, llm: cfg.llm, balance: cfg.balance };
   } catch (err) {
     warnings.push('生效配置读取失败：' + String(err && err.message ? err.message : err));
     return null;

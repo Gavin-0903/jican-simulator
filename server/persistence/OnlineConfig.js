@@ -29,6 +29,19 @@ export const ONLINE_DEFAULTS = Object.freeze({
   tailscale: { autoStart: true, expose: 'serve' },
 });
 
+/**
+ * 落盘的 mode 只能是 'serve' | 'funnel' | 'off'（ConfigLoader 的 online.mode 规则如此）。
+ * 但运行期对外用的是 'tailnet' 这套三选一词汇，历史版本还会把 'tailnet' 直接写进 config.json；
+ * 这里统一归一化，否则读回来的值会被校验判成非法，设置页任何 online 段改动都会 400。
+ */
+function normalizeStoredMode(mode) {
+  const m = String(mode ?? '').trim().toLowerCase();
+  if (m === 'funnel') return 'funnel';
+  if (m === 'off' || m === 'none' || m === 'disabled') return 'off';
+  if (m === 'tailnet' || m === 'serve' || m === 'tsnet') return 'serve';
+  return ONLINE_DEFAULTS.mode;
+}
+
 /** 读 data/config.json（不存在或损坏都返回默认值，绝不抛）。 */
 export function readOnlineConfig(rootDir) {
   const file = FILE(rootDir);
@@ -39,6 +52,7 @@ export function readOnlineConfig(rootDir) {
     return {
       ...ONLINE_DEFAULTS,
       ...online,
+      mode: normalizeStoredMode(online.mode),
       tailscale: { ...ONLINE_DEFAULTS.tailscale, ...(online.tailscale ?? {}) },
     };
   } catch {
@@ -60,6 +74,7 @@ export function writeOnlineConfig(rootDir, patch) {
     ...ONLINE_DEFAULTS,
     ...prev,
     ...patch,
+    mode: normalizeStoredMode(patch.mode ?? prev.mode),
     tailscale: { ...ONLINE_DEFAULTS.tailscale, ...(prev.tailscale ?? {}), ...(patch.tailscale ?? {}) },
   };
   mkdirSync(dirname(file), { recursive: true });

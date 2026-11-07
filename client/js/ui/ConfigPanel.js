@@ -76,6 +76,73 @@ function jsonFileKeyOf(path) {
   return 'default';
 }
 
+/**
+ * online 段在 JSON 树里的点路径 → POST /api/config 的 patch。
+ *
+ * 为什么不能走 /api/config/json：那条路把值写回 config/default.json，而运行期的 online 段
+ * 读的是 data/config.json（persistence/OnlineConfig.js）——改了前者等于写错文件、界面显示成功但毫无效果。
+ * 返回 null = 不是 online 叶子（照旧走 JSON 写盘）。
+ */
+const ONLINE_DIRECT_KEYS = new Set(['enabled', 'mode', 'serverUrl', 'token', 'port']);
+const ONLINE_TAILSCALE_KEYS = new Set(['autoStart', 'expose', 'bg']);
+function onlinePatchOf(path, value) {
+  const p = String(path ?? '');
+  const direct = p.match(/^(?:app\.)?online\.([^.]+)$/);
+  if (direct && ONLINE_DIRECT_KEYS.has(direct[1])) return { [direct[1]]: value };
+  const nested = p.match(/^(?:app\.)?online\.tailscale\.([^.]+)$/);
+  if (nested && ONLINE_TAILSCALE_KEYS.has(nested[1])) return { tailscale: { [nested[1]]: value } };
+  return null;
+}
+
+/** online 叶子「撤销」时回到 ONLINE_DEFAULTS 的值（online 没有 override 文件，删除键会被默认值兜底）。 */
+function onlineDefaultOf(path) {
+  const p = String(path ?? '');
+  const direct = p.match(/^(?:app\.)?online\.([^.]+)$/);
+  if (direct) {
+    switch (direct[1]) {
+      case 'enabled': return false;
+      case 'mode': return 'serve';
+      case 'serverUrl': return '';
+      case 'token': return '';
+      case 'port': return 5173;
+      default: return null;
+    }
+  }
+  const nested = p.match(/^(?:app\.)?online\.tailscale\.([^.]+)$/);
+  if (nested) {
+    if (nested[1] === 'autoStart' || nested[1] === 'bg') return true;
+    if (nested[1] === 'expose') return 'serve';
+  }
+  return null;
+}
+
+/**
+ * 枚举型配置项 → 下拉选项（用户要求：「把 online.mode 后面的输入框换成选项（serve/funnel……）」）。
+ *
+ * 选项只列**服务端真的会接受**的值，选了别的会被 /api/config 的校验 400 拒掉：
+ *   online.mode             → ConfigLoader.APP_RULES 只认 'serve' | 'funnel'（'off' 不在白名单里，
+ *                              要关掉联机请把 online.enabled 改成 false 或到设置页点「关闭」）；
+ *   online.tailscale.expose → ConfigAdmin.validateOnline 认 'serve' | 'funnel' | 'off'。
+ * 树里的 path 带 config/default.json 的 app. 前缀（app.online.mode），比较前统一剥掉。
+ */
+const SELECT_FIELDS = new Map([
+  ['online.mode', [
+    { value: 'serve', label: 'serve — Serve（只有同一 tailnet 内的设备能访问）' },
+    { value: 'funnel', label: 'funnel — Funnel（公网可访问）' },
+  ]],
+  ['online.tailscale.expose', [
+    { value: 'serve', label: 'serve — Serve（只有 tailnet 内能访问）' },
+    { value: 'funnel', label: 'funnel — Funnel（公网可访问）' },
+    { value: 'off', label: 'off — 关闭（不对外暴露）' },
+  ]],
+]);
+
+/** 该路径有没有下拉选项；没有 → null（照旧渲染文本框）。 */
+function selectSpecOf(path) {
+  const p = String(path ?? '');
+  return SELECT_FIELDS.get(p.startsWith('app.') ? p.slice(4) : p) ?? null;
+}
+
 /** 把 /api/config/json 的 files 清单收敛成导航要的形状：[{key, file, label}]。 */
 function normalizeFileEntries(files) {
   const out = [];
@@ -522,10 +589,12 @@ export class ConfigPanel {
     }
     this.busyPath = node.path;
     if (inputEl) inputEl.disabled = true;
-    const r = await req('/api/config/json', {
+    // online 段必须写 data/config.json（POST /api/config），写 config/default.json 不会生效
+    const onlinePatch = onlinePatchOf(node.path, parsed.value);
+    const r = await req(onlinePatch ? '/api/config' : '/api/config/json', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: node.path, value: parsed.value }),
+      body: JSON.stringify(onlinePatch ? { section: 'online', patch: onlinePatch } : { path: node.path, value: parsed.value }),
     }, JSON_TIMEOUT_MS);
     this.busyPath = '';
     if (inputEl && inputEl.isConnected) inputEl.disabled = false;
@@ -544,7 +613,7 @@ export class ConfigPanel {
     this.invalid.delete(node.path);
     // 服务端返回的 file 就是真实落盘文件（如 'config/default.json'），原样展示，别自己拼
     const file = r.json.file ? String(r.json.file).replace(/\\/g, '/') : '';
-    const shown = file || ('config/' + (jsonFileKeyOf(node.path)) + '.json');
+    const shown = onlinePatch ? 'data/config.json' : (file || ('config/' + (jsonFileKeyOf(node.path)) + '.json'));
     this.setFlash('已写入 ' + shown + '（立即生效）', 'ok');
     this.onSaved?.();
     const path = node.path;
@@ -557,10 +626,12 @@ export class ConfigPanel {
     if (this.busyPath) return;
     this.busyPath = node.path;
     this.setFlash('正在撤销 ' + node.path + ' …', 'info');
-    const r = await req('/api/config/json', {
+    // online 没有 override 文件：撤销 = 写回该键的默认值（删除键会被 readOnlineConfig 合并回默认，等价）
+    const onlineDefault = onlineDefaultOf(node.path);
+    const r = await req(onlineDefault ? '/api/config' : '/api/config/json', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path: node.path, value: null }),
+      body: JSON.stringify(onlineDefault ? { section: 'online', patch: onlinePatchOf(node.path, onlineDefault) } : { path: node.path, value: null }),
     }, JSON_TIMEOUT_MS);
     this.busyPath = '';
     if (!r.ok || !r.json || r.json.ok === false) {
@@ -907,6 +978,25 @@ export class ConfigPanel {
     let valueEl;
     if (node.hasChildren) {
       valueEl = h('span.cfg-val.cfg-val-container', { text: containerLabel(node.type) });
+    } else if (selectSpecOf(node.path)) {
+      // 枚举项：下拉框（值只可能是服务端白名单里的那几个，手打容易被 400 拒掉）
+      const spec = selectSpecOf(node.path);
+      const select = h('select.cfg-val.cfg-select.cfg-typed-' + node.type, {
+        'aria-label': node.path,
+        title: '可选值：' + spec.map((o) => o.value).join(' / '),
+      });
+      // 当前值不在选项里（老版本写进去的 tailnet、或手改过 config.json）时补一条只读展示，
+      // 否则 <select> 会静默显示第一项，看起来像「配置自己变了」。
+      const opts = spec.some((o) => o.value === node.value)
+        ? spec
+        : [{ value: node.value, label: String(node.value) + '（当前值，不在可选列表里）' }, ...spec];
+      for (const o of opts) select.append(h('option', { value: o.value, text: o.label }));
+      select.value = node.value;
+      select.addEventListener('change', () => {
+        if (this.busyPath === node.path) return;
+        void this.commit(node, select.value, select);
+      });
+      valueEl = select;
     } else {
       const input = h('input.cfg-val.cfg-typed-' + node.type, {
         type: 'text',
@@ -1046,6 +1136,57 @@ export class ConfigPanel {
     }));
     frag.append(kv('server.role', isSource ? '服务器源（本机）' : '客户端（连别人的服务器源）'));
     frag.append(kv('server.rooms', String(rooms.count ?? 0) + ' 间房'));
+
+    // 默认服务器源（可编辑）：写 data/config.json 的 online.serverUrl。
+    // 以前联机页只有只读展示、JSON 页改了又落错文件，用户才会觉得「根本没法设置默认服务器源」。
+    const sourceValue = String(adminOnline.serverUrl || '');
+    const sourceInput = h('input.input.cfg-invite-name', {
+      type: 'text',
+      value: sourceValue,
+      placeholder: 'https://xxxxx.ts.net 或 http://192.168.1.10:5173（留空＝自动）',
+      'aria-label': '默认服务器源地址',
+    });
+    forceEnglishInput(sourceInput);
+    const saveSource = async () => {
+      const value = String(sourceInput.value || '').trim().replace(/\/+$/, '');
+      if (value && !/^https?:\/\//i.test(value)) {
+        sourceInput.classList.add('cfg-invalid');
+        sourceInput.title = '必须以 http:// 或 https:// 开头（留空＝自动）';
+        this.setFlash('默认服务器源必须以 http:// 或 https:// 开头（留空＝自动）', 'danger');
+        return;
+      }
+      sourceInput.classList.remove('cfg-invalid');
+      sourceInput.removeAttribute('title');
+      const r = await req('/api/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ section: 'online', patch: { serverUrl: value } }),
+      }, JSON_TIMEOUT_MS);
+      if (this.modals.kind !== 'config') return;
+      if (!r.ok || !r.json || r.json.ok === false) {
+        const msg = (Array.isArray(r.json?.errors) && r.json.errors[0]?.message)
+          || r.json?.error
+          || r.error
+          || (r.status ? '保存失败（HTTP ' + r.status + '）' : OFFLINE_TEXT);
+        this.setFlash(msg, 'danger');
+        return;
+      }
+      this.setFlash(value ? '默认服务器源已保存：' + value : '默认服务器源已清空（自动使用本机地址）', 'ok');
+      // reload 末尾会重拉联机信息，输入框与只读行都会变成新的生效值
+      await this.reload();
+    };
+    sourceInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        void saveSource();
+      }
+    });
+    frag.append(h('div.cfg-invite', {},
+      sourceInput,
+      h('button.btn.sm.primary', { type: 'button', onclick: () => void saveSource() }, icon('check', 'sm'), '保存默认服务器源')));
+    frag.append(h('div.cfg-hint', { text: isSource
+      ? '本机正在当服务器源：这个值会被 TailScale 暴露地址自动覆盖（分享文案也会自动换成 https://xxx.ts.net）。'
+      : '保存进 data/config.json 的 online.serverUrl；下次打开联机页，「高级」里的服务器源会自动填这个地址。' }));
 
     // ── 邀请链接 ───────────────────────────────────────────────────────────────
     frag.append(h('div.cfg-sec-title', { text: '邀请链接' }));

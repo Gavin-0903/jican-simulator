@@ -75,17 +75,53 @@ export function isRoomJoinQuery(input) {
  * 为什么 lobby 分支要原样透传 query：服务端 LobbyGateway.resolve 认的就是自己发出去的那串，
  * 前端重排 key 或重新编码会在中文用户名上产生 UA 差异，索性一个字节都不动。
  */
+/** 纯网页版：查询串里的 src= 是用户填的服务器源（http(s) 地址），只在本页用，不发给服务端。 */
+function remoteWsOrigin(search) {
+  let raw = '';
+  try {
+    const q = new URLSearchParams(str(search).replace(/^\?/, ''));
+    raw = str(q.get('src'));
+  } catch { raw = ''; }
+  if (!raw) {
+    try {
+      if (typeof localStorage !== 'undefined') raw = str(localStorage.getItem('jican.web.source'));
+    } catch { raw = ''; }
+  }
+  if (!/^https?:\/\//i.test(raw)) return '';
+  try {
+    const u = new URL(raw);
+    return `${u.protocol === 'https:' ? 'wss' : 'ws'}://${u.host}`;
+  } catch { return ''; }
+}
+
+/** 把纯网页版专用的 src= 从 query 里摘掉；没有 src 时原样返回，保证服务端参数一个字节都不变。 */
+function stripWebSource(raw) {
+  if (raw.indexOf('src=') < 0) return raw;
+  try {
+    const q = new URLSearchParams(raw);
+    q.delete('src');
+    return q.toString();
+  } catch { return raw; }
+}
+
 export function buildConnectionUrl({ search = '', origin = '', protocol = '', host = '' } = {}) {
   const q = str(search);
   const base = str(origin).replace(/\/+$/, '');
-  const originProtocol = protocol || (base ? new URL(base).protocol : '') || 'http:';
-  const originHost = str(host) || (base ? new URL(base).host : '');
-  const wsOrigin = originHost ? `${originProtocol === 'https:' ? 'wss' : 'ws'}://${originHost}` : '';
+  // file://（纯网页版双击打开）没有可用的 origin，new URL('null') 会抛异常：
+  // 拿不到 origin 就当"没有 wsOrigin"，退回相对路径，由页面自己决定怎么连。
+  let parsedOrigin = null;
+  try { parsedOrigin = base && base !== 'null' ? new URL(base) : null; } catch { parsedOrigin = null; }
+  const originProtocol = protocol || (parsedOrigin ? parsedOrigin.protocol : '') || 'http:';
+  const originHost = str(host) || (parsedOrigin ? parsedOrigin.host : '');
+  let wsOrigin = originHost ? `${originProtocol === 'https:' ? 'wss' : 'ws'}://${originHost}` : '';
+  // 纯网页版：没有本机 origin，但有用户填的服务器源 → 用服务器源的 ws(s) 地址。
+  if (!wsOrigin) wsOrigin = remoteWsOrigin(q);
   if (!isRoomJoinQuery(q)) {
     return { channel: 'ws', path: '/ws', url: wsOrigin ? `${wsOrigin}/ws` : '/ws', room: false };
   }
   const raw = q.startsWith('?') ? q.slice(1) : q.includes('?') ? q.slice(q.indexOf('?') + 1) : q;
-  const path = `/lobby?${raw}`;
+  const cleaned = stripWebSource(raw);
+  const path = cleaned ? `/lobby?${cleaned}` : '/lobby';
   return { channel: 'lobby', path, url: wsOrigin ? `${wsOrigin}${path}` : path, room: true };
 }
 

@@ -4,7 +4,7 @@
 
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, watchBalance } from './persistence/ConfigLoader.js';
@@ -17,6 +17,7 @@ import { WsServer } from './net/WsServer.js';
 import { loadOrCreateIdKey } from './net/IdKey.js';
 import { RoomManager } from './net/RoomManager.js';
 import { createLobbyRouter } from './net/LobbyHttp.js';
+import { createUpdater } from './net/Updater.js';
 import { LobbyGateway } from './net/LobbyGateway.js';
 import { createConfigAdmin } from './net/ConfigAdmin.js';
 import { applySetup, readSettings, writeSettings } from './persistence/AppSettings.js';
@@ -26,6 +27,23 @@ import { findTailscale, makeOnlineToken, resetExpose, runTailscale, setExposeMod
 import { classifyMode, diffConfig, funnelCaps, funnelPortNote, maskToken, readServeConfig } from './net/OnlineAdmin.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+/**
+ * 打包版元数据（v1.2 自动更新用）：SEA 入口（packaging/sea-entry.cjs）启动时会把
+ * manifest.json 写进解包目录并设 globalThis.__JICAN_APP_MANIFEST__。
+ * 开发期两者都没有 → 返回 null，自动更新因此不启用（避免 npm start 每次都弹更新框）。
+ */
+function readPackagedMeta(rootDir) {
+  const injected = globalThis.__JICAN_APP_MANIFEST__;
+  if (injected && typeof injected === 'object') return injected;
+  try {
+    const raw = readFileSync(join(rootDir, 'manifest.json'), 'utf8');
+    const meta = JSON.parse(raw);
+    return meta && typeof meta === 'object' ? meta : null;
+  } catch {
+    return null;
+  }
+}
 
 function listen(server, host, port) {
   return new Promise((ok, fail) => {
@@ -55,17 +73,26 @@ function toExposeMode(mode) {
   return null;
 }
 
-/** 端口被占用时依次尝试后续端口。 */
+/**
+ * 端口不可用时依次尝试后续端口。
+ *
+ * 除了 EADDRINUSE（真被占用），Windows 上还有 EACCES：别的进程用
+ * SO_EXCLUSIVEADDRUSE 占了 0.0.0.0:端口 时，再去 bind 127.0.0.1:同一端口
+ * 会拿到「permission denied」而不是「address in use」（实测 clouddrive 占 5173 就是这样）。
+ * 两种都属于「这个端口用不了」，一起走回退，不能让服务直接起不来。
+ */
 async function listenWithFallback(server, host, port, range, logger) {
   for (let i = 0; i <= range; i++) {
     try {
       return await listen(server, host, port === 0 ? 0 : port + i);
     } catch (err) {
-      if (err.code !== 'EADDRINUSE' || port === 0) throw err;
-      logger.warn?.(`[server] 端口 ${port + i} 已被占用，尝试 ${port + i + 1}`);
+      const blocked = err.code === 'EADDRINUSE' || err.code === 'EACCES';
+      if (!blocked || port === 0) throw err;
+      const why = err.code === 'EACCES' ? '没有权限' : '已被占用';
+      logger.warn?.(`[server] 端口 ${port + i} ${why}，尝试 ${port + i + 1}`);
     }
   }
-  throw new Error(`端口 ${port}–${port + range} 均被占用`);
+  throw new Error(`端口 ${port}–${port + range} 都不可用（被占用或无权限）`);
 }
 
 export async function startServer(opts = {}) {
@@ -94,6 +121,14 @@ export async function startServer(opts = {}) {
     logger,
     // 广播玩家列表：房间成员变化时推到所有已连上的窗口（ws 此刻还没建，用 wsRef 间接引用）
     broadcast: () => wsRef.value?.broadcastPlayers(),
+  });
+  // 房间局结算后 120 秒自动删房并回大厅（单机局没有 activeRoomId，不会起表）。
+  controller.on('gameover', () => {
+    try {
+      lobby.onGameOver();
+    } catch (err) {
+      logger.warn?.(`[room] 结算后自动离开计时启动失败：${err?.message ?? err}`);
+    }
   });
   const settings = readSettings(rootDir);
   // 联机（v0.3）：data/config.json 的 online 段由安装期/启动期自动写入；交给 startServer 后
@@ -184,7 +219,7 @@ export async function startServer(opts = {}) {
       return { id: v.id, owner: v.owner, members: v.members, memberCount: v.members.length, createdAt: v.createdAt };
     });
     return {
-      app: { name: config.app?.name ?? 'jican-simulator', version: config.app?.version ?? '', pid: process.pid },
+      app: { name: config.app?.name ?? 'jican-simulator', version: updateVersion, pid: process.pid },
       dataDir: dataDir(),
       portFile: join(dataDir(), 'config.json'),
       port,
@@ -232,6 +267,22 @@ export async function startServer(opts = {}) {
       if (config.balance && typeof config.balance === 'object') Object.assign(config.balance, next.balance);
     },
   });
+  // 自动更新（v1.2）：只有打包版启用；开发期可用 JICAN_UPDATE_DEV=1 强制验证整条流程。
+  // 版本号来自构建清单（build.mjs 的 manifest.version），develop 期退回 package.json/config。
+  const packagedMeta = readPackagedMeta(rootDir);
+  const updateEnabled = Boolean(packagedMeta) || process.env.JICAN_UPDATE_DEV === '1';
+  const updateVersion = (packagedMeta && packagedMeta.version) || process.env.JICAN_APP_VERSION || config.app?.version || '';
+  const updater = createUpdater({
+    rootDir,
+    dataDir: dataDir(),
+    logger,
+    enabled: updateEnabled,
+    version: updateVersion,
+    flavor: (packagedMeta && packagedMeta.flavor) || '',
+    setupName: (packagedMeta && packagedMeta.setupName) || '',
+    requestQuit: () => requestShutdown?.('update'),
+  });
+
   const lobbyRouter = createLobbyRouter({
     rooms,
     idKey: idKey.key,
@@ -257,8 +308,9 @@ export async function startServer(opts = {}) {
       return { token, masked: mt.masked, length: mt.length, ok: true };
     },
     // 桌面宿主（v0.4）：/api/app/ping 回显版本与端口，/api/app/quit 交给下面的 shutdown 通道。
-    appInfo: () => ({ version: config.app?.version ?? '', uptime: Math.round(process.uptime()) }),
+    appInfo: () => ({ version: updateVersion, uptime: Math.round(process.uptime()) }),
     requestQuit: () => requestShutdown?.('launcher'),
+    updater,
     configAdmin,
     lobby,
     broadcastPlayers: () => wsRef.value?.broadcastPlayers(),

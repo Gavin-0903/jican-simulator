@@ -49,7 +49,7 @@ export function isLoopbackHost(host) {
 
 /** 浏览器 Origin 校验：必须是本机回环地址且端口一致（防止其他网页劫持本地游戏）。 */
 export function originAllowed(origin, port, bindHost) {
-  if (!origin) return true; // 非浏览器客户端（测试脚本等）
+  if (!origin || origin === 'null') return true; // 非浏览器客户端（测试脚本等）；file:// 纯网页版发的是 Origin: null
   try {
     const u = new URL(origin);
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;

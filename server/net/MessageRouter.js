@@ -71,12 +71,18 @@ export class MessageRouter {
         }
         return;
       }
-      case MSG.LEAVE:
+      case MSG.LEAVE: {
         if (phase !== PHASE.PLAYING && phase !== PHASE.PAUSED) return conn.error(ERR.STATE, '当前没有进行中的对局', seq);
+        // 只结束这一局：结算后所有人有 120 秒看排名（房主点「返回大厅」或倒计时到点才删房）。
         return c.quit();
-      case MSG.LOBBY:
+      }
+      case MSG.LOBBY: {
         if (phase === PHASE.PLAYING || phase === PHASE.PAUSED) return conn.error(ERR.STATE, '对局进行中，请先结束本局', seq);
+        // 结算页「返回大厅」= 房主放弃这间房：和 120 秒自动离开一样，先删房再回大厅。
+        // 非房主/单机连接这里返回 false，只把自己送回大厅，房间留给房主。
+        if (phase === PHASE.ENDED) this.closeOwnedRoom(conn);
         return c.toLobby();
+      }
       case MSG.PAUSE:
         if (!c.pause(payload.on, 'player')) return conn.error(ERR.STATE, payload.on ? '当前无法暂停' : '当前没有暂停', seq);
         return;
@@ -113,6 +119,43 @@ export class MessageRouter {
       default:
         return conn.error(ERR.BADMSG, '不支持的消息', seq);
     }
+  }
+
+  /**
+   * 结算页房主点「返回大厅」后，把这间房从服务器上直接删掉。
+   *
+   * 只处理同时满足三件事的连接：带房间上下文（/lobby 握手成功）、房间还在、
+   * 且这条连接的身份就是 room.ownerId。单机、成员退出一律返回 false，房间原样保留。
+   *
+   * 删房必须「静默」：此时 GameController.quit() 已经把结算包广播出去了，
+   * 所以 closeRoom 要传 toLobby:false —— 否则所有人刚看到的结算会立刻被换成大厅。
+   * 删除后补发一条 room.closed，前端据此收起结算页的「再来一局」（房间没了，重开必然失败）。
+   *
+   * @param {object} conn WsServer 的连接对象
+   * @returns {boolean} 是否真的删掉了房间
+   */
+  closeOwnedRoom(conn) {
+    const info = conn?.lobby;
+    const rooms = this.lobby?.rooms;
+    const roomId = String(info?.room?.id ?? '');
+    if (!roomId || !rooms) return false;
+    const room = rooms.rooms.get(roomId);
+    if (!room) return false; // 已经被「清除房间」/ 另一条连接删掉了
+    if (String(info.idKey ?? '') !== String(room.ownerId ?? '')) return false;
+    const out = rooms.close(roomId, info.idKey);
+    if (!out?.ok) return false;
+    try {
+      this.lobby.closeRoom?.(roomId, out.room ?? room, { toLobby: false });
+    } catch (err) {
+      this.log?.warn?.(`[room] 房主退出后清理房间 ${roomId} 失败：${err?.message ?? err}`);
+    }
+    try {
+      // 走 controller 的广播通道（WsServer 订阅后群发），没有就直接跳过 —— 只是 UI 优化。
+      this.lobby.controller?.emit?.('packet', MSG.ROOM_CLOSED, { roomId });
+    } catch {
+      /* controller 还没装好：忽略 */
+    }
+    return true;
   }
 
   /** 这条连接的座位角色（联机座位玩家）。没有返回 null。 */

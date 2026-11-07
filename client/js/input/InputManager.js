@@ -39,6 +39,7 @@ export class InputManager {
     this.ui = ui;
     this.keys = new Set();
     this.pointer = null; // { id, x, y }（屏幕坐标）
+    this.touchDir = { x: 0, y: 0 }; // 移动端虚拟摇杆方向（-1..1）
     this.lastSent = { x: 0, y: 0, face: null };
     this.lastFaceAt = 0;
     this.faceAngle = null;
@@ -202,7 +203,17 @@ export class InputManager {
   clear() {
     this.keys.clear();
     this.pointer = null;
+    this.touchDir = { x: 0, y: 0 };
     this.sync(true);
+  }
+
+  /** 移动端摇杆：传入已归一化的方向；松开时传 0,0。 */
+  setTouchDirection(x, y) {
+    const nx = Number(x) || 0;
+    const ny = Number(y) || 0;
+    if (nx === this.touchDir.x && ny === this.touchDir.y) return;
+    this.touchDir = { x: nx, y: ny };
+    this.sync();
   }
 
   direction() {
@@ -214,6 +225,7 @@ export class InputManager {
       y += MOVE_KEYS[code][1];
     }
     if (x || y) return normalize({ x, y });
+    if (this.touchDir.x || this.touchDir.y) return normalize(this.touchDir);
     if (this.pointer) {
       const me = this.store.myChar();
       const w = this.renderer.toWorld(this.pointer.x, this.pointer.y);
@@ -252,6 +264,7 @@ export class InputManager {
   tick() {
     if (this.pointer) this.sync();
     else if (!this.canMove && (this.lastSent.x || this.lastSent.y)) this.sync();
+    else if (!this.canMove && (this.touchDir.x || this.touchDir.y)) this.touchDir = { x: 0, y: 0 };
   }
 }
 

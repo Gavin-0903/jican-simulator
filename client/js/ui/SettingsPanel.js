@@ -4,6 +4,8 @@
 
 import { h, icon, kbd } from '../util/dom.js';
 import { forceEnglishInput } from '../util/ime.js';
+import { FPS_OPTIONS, getFps, setFps } from '../render/fps.js';
+import { platformInfo } from '../util/platform.js';
 
 const KEYS = [
   ['W A S D / 方向键', '移动（按住鼠标左键也可朝鼠标方向移动）'],
@@ -643,22 +645,35 @@ export class SettingsPanel {
   }
 
   viewTab(ctx) {
-    const { camSeg, coneSeg, llm, on } = ctx;
+    const { camSeg, coneSeg, fpsSeg, llm, on } = ctx;
     return [
       h('div.note', {}, h('span.badge-llm' + (on ? '.on' : '.degraded'), {}, h('span.dot')),
         h('span', { text: on ? 'AI 增强：已启用（本地模型生成台词与性格倾向）' : 'AI 增强：已降级为纯规则 AI' + (llm && llm.reason ? '（' + llm.reason + '）' : '') })),
       h('div.kv',
         h('dt', { text: '镜头' }), h('dd', {}, camSeg),
         h('dt', { text: '老师视野扇形' }), h('dd', {}, coneSeg),
+        h('dt', { text: '帧率（流畅度）' }), h('dd', {}, fpsSeg),
         h('dt', { text: '网络延迟' }), h('dd', { text: this.net && this.net.latency != null ? this.net.latency + ' ms' : '—' }),
         h('dt', { text: '随机种子' }), h('dd', { text: String((this.store.game && this.store.game.seed) != null ? this.store.game.seed : '—') })),
+      h('div.note', {}, icon('speed', 'sm'),
+        h('span', { text: '帧率只影响本机画面刷新，不影响对局判定（服务端 10 次/秒逻辑照旧）。调低更省电、机器不烫；调高更顺滑。' })),
+      h('div.note', {}, icon('camera', 'sm'),
+        h('span', { text: '「不限」= 跟随显示器刷新率（由 requestAnimationFrame 的 vsync 兜底）；设 120 而屏幕只有 60Hz 时，看到的仍是 60 帧。' })),
     ];
   }
 
   keysTab(ctx) {
     const { hasItems } = ctx;
+    const p = platformInfo();
     return [
-      h('div.section-title', {}, icon('keyboard', 'sm'), '快捷键'),
+      h('div.section-title', {}, icon('user', 'sm'), '当前设备'),
+      h('dl.kv',
+        h('dt', { text: '设备类型' }), h('dd', { text: p.label }),
+        h('dt', { text: '输入方式' }), h('dd', { text: p.touch ? '触屏 / 触摸板' : '键盘 + 鼠标' }),
+        h('dt', { text: '操作布局' }), h('dd', { text: p.mobile ? '移动端：左下摇杆 + 右下技能按钮' : '桌面端：键盘 + 鼠标' })),
+      p.mobile ? h('div.note', {}, icon('hand', 'sm'),
+        h('span', { text: '移动端：左下角摇杆拖动移动；右下角「交互 / 提问 / 讨好 / JC / 积分 / 商店 / 统计」是触屏按钮。道具直接点画面顶部道具栏的槽位。' })) : null,
+      p.mobile ? h('div.section-title', {}, icon('keyboard', 'sm'), '快捷键（接键盘时仍可用）') : h('div.section-title', {}, icon('keyboard', 'sm'), '快捷键'),
       h('dl.kv', {}, ...KEYS.flatMap(([k, v]) => [h('dt', {}, kbd(k)), h('dd', { text: v })])),
       hasItems ? h('div.section-title', {}, icon('bolt', 'sm'), '道具快捷键') : null,
       hasItems ? h('dl.kv', {}, ...ITEM_KEYS.flatMap(([k, v]) => [h('dt', {}, kbd(k)), h('dd', { text: v })])) : null,
@@ -696,7 +711,16 @@ export class SettingsPanel {
           this.rerender();
         },
       }, label)));
-    return { llm, hasItems, on, camSeg, coneSeg };
+    // 帧率（流畅度）：纯本机偏好，存 localStorage（client/js/render/fps.js），改完立刻生效。
+    const fpsSeg = h('div.segmented',
+      ...FPS_OPTIONS.map(([v, label]) => h('button', {
+        'aria-pressed': String(getFps() === v),
+        onclick: () => {
+          setFps(v);
+          this.rerender();
+        },
+      }, label, v ? ' 帧' : '')));
+    return { llm, hasItems, on, camSeg, coneSeg, fpsSeg };
   }
 
   show(onClose) {

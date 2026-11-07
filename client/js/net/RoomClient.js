@@ -7,7 +7,7 @@ const IDKEY_RE = /^[0-9a-fA-F]{256}$/;
 /** 服务器源地址规范化：用户可能只填 https://xxxxx.ts.net 或带尾斜杠。 */
 export function normalizeOrigin(raw) {
   const text = String(raw ?? '').trim();
-  if (!text) return '';
+  if (!text || /^(null|undefined|file:)/i.test(text)) return '';
   const withScheme = /^https?:\/\//i.test(text) ? text : `https://${text}`;
   try {
     const u = new URL(withScheme);

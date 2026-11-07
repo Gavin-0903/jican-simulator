@@ -97,6 +97,7 @@ export class NetClient extends EventTarget {
     this.pushLobby = false; // 服务端可能把 MSG.LOBBY 当"推送"用（payload 里带 players 才算）
     this.retryIn = null; // 下一次自动重连的等待毫秒数（null = 不重连）
     this.lastLobbyBody = null; // /api/net/room/check 最近一次诊断结果（{ok:false,status,code,error}）
+    this.roomClosed = false; // 服务端通知「房间已被房主删除」：结算页不能再点「再来一局」
   }
 
   /** 当前是不是联机房间里的观战者（自己不能操作，只能看）。 */
@@ -188,6 +189,23 @@ export class NetClient extends EventTarget {
   }
 
   /**
+   * 立刻重连一次（座位变化后用）。
+   *
+   * 为什么需要：welcome 里的 role/me 是**握手那一刻**按房间座位表算的。选座走的是
+   * HTTP /api/lobby/room/seat，只改服务端座位表，不会升级已连着的这条连接——同一个人
+   * 从「观战」变「玩家」必须重新 hello 一次，服务端才会 attachViewer 并回 controller welcome。
+   * 不重连就会出现「选了座位、开局后仍是观战」的假死状态。
+   */
+  reconnect() {
+    clearTimeout(this.reconnectTimer);
+    const old = this.ws;
+    this.ws = null;
+    try { old?.close(); } catch { /* 旧连接已经断了 */ }
+    this.attempt = 0;
+    this.connect();
+  }
+
+  /**
    * 这次断开是不是"再来一次也没用"的鉴权失败。
    * 浏览器 WebSocket 在握手被拒时固定给 1006（不给状态行），但会把状态行的文本塞进 reason
    * （'Not Found' / 'Bad Request' …），所以 reason 非空 + 联机通道 ≈ 服务端拒绝了这组房间参数。
@@ -276,6 +294,8 @@ export class NetClient extends EventTarget {
       case MSG.WELCOME:
         if (p.sessionId) session.set(p.sessionId);
         this.welcomed = true;
+        // 新 welcome = 新的一次握手：房间是否已删除要按服务端这次说的话重新算。
+        this.roomClosed = false;
         this.role = p.role ?? null;
         // 联机 welcome 额外带 room / players（单机路径没有这两个键，保持老协议不变）
         this.room = p.room ?? null;
@@ -323,6 +343,11 @@ export class NetClient extends EventTarget {
         break;
       case MSG.GAMEOVER:
         this.store.setGameover(p);
+        break;
+      case MSG.ROOM_CLOSED:
+        // 房主退出/结算时服务端已经把房间删了：这不是断线，是房间号彻底作废。
+        this.roomClosed = true;
+        this.emit('room-closed', p ?? {});
         break;
       case MSG.PONG:
         if (typeof p.t === 'number') this.latency = Math.round(performance.now() - p.t);

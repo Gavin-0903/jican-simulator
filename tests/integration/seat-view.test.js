@@ -155,6 +155,24 @@ test('两个座位玩家各收各的 snapshot：me / playerCharId 是自己的�
     assert.equal(ga.winnerId, gb.winnerId, '名次判定是全局的，两人看到的冠军必须是同一个');
     assert.equal(JSON.stringify(ga.ranking), JSON.stringify(gb.ranking), '排名表一致，只有「我是谁」不同');
     console.log('  ▶ gameover 甲 playerCharId=' + ga.playerCharId + ' 乙 playerCharId=' + gb.playerCharId + ' winner=' + ga.winnerId);
+
+    // 结算后 120 秒离开（需求 m01341）：刚结算时房间还在，两人都还能看到排名；
+    // 房主点「返回大厅」才删房并广播 room.closed。
+    const still = await fetch('http://127.0.0.1:' + app.port + '/api/net/room?roomid=' + room.id);
+    const stillBody = await still.json();
+    assert.equal(stillBody.ok, true, '结算后要先保留房间（120 秒看排名）');
+
+    a.ws.send(encode(MSG.LOBBY, {}, 4));
+    const closedA = await waitFor(() => lastOf(a, MSG.ROOM_CLOSED));
+    const closedB = await waitFor(() => lastOf(b, MSG.ROOM_CLOSED));
+    assert.ok(closedA && closedB, '房主返回大厅后两人都要收到 room.closed');
+    assert.equal(closedA.roomId, room.id, 'room.closed 要带被删的房间号');
+    // 房间号立刻失效：GET /api/net/room 是前端判断「房间还在不在」的兜底接口。
+    const gone = await fetch('http://127.0.0.1:' + app.port + '/api/net/room?roomid=' + room.id);
+    const goneBody = await gone.json();
+    assert.equal(goneBody.ok, false, '房主返回大厅后房间必须已从服务器删除');
+    assert.ok(!goneBody.room, '已删除的房间不能再查得到');
+    console.log('  ▶ 房主返回大厅后房间 ' + room.id + ' 已删除，双方收到 room.closed');
   } finally {
     a?.close();
     b?.close();

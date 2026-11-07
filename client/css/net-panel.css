@@ -96,6 +96,8 @@ input[data-defaulted="1"] { border-left: 2px solid rgba(255, 207, 92, .65); }
 .net2-roompage { gap: 8px; }
 .net2-roompage-ops { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .net2-roompage-ops .net2-hint { font: var(--fs-xs)/1.5 var(--font); }
+.net2-roompage-start { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.net2-roompage-start .net2-hint { font: var(--fs-xs)/1.5 var(--font); }
 
 /* 房间卡 */
 .net2-room {

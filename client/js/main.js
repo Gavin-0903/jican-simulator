@@ -1,13 +1,16 @@
 // 前端引导：拉取地图 → 初始化渲染器与 UI → 连接服务端 → 启动渲染循环。
 
-import { ACTION, MSG, PHASE, SPEEDS } from '/shared/constants.js';
+import { ACTION, GAMEOVER_LEAVE_MS, MSG, PHASE, SPEEDS } from '/shared/constants.js';
 import { GameStore } from './store/GameStore.js';
 import { NetClient } from './net/NetClient.js';
 import { SvgRenderer } from './render/SvgRenderer.js';
+import { shouldRender } from './render/fps.js';
 import { InputManager } from './input/InputManager.js';
+import { MobileControls } from './input/MobileControls.js';
 import { h, hydrateIcons, icon } from './util/dom.js';
 import { ModalHost } from './ui/Modal.js';
 import { Toast } from './ui/Toast.js';
+import { checkForUpdates } from './ui/UpdateChecker.js';
 import { HudPanel } from './ui/HudPanel.js';
 import { Lobby } from './ui/Lobby.js';
 import { PcDialog } from './ui/PcDialog.js';
@@ -23,9 +26,10 @@ import { StatsPanel } from './ui/StatsPanel.js';
 import { ItemShop } from './ui/ItemShop.js';
 import { ItemBar } from './ui/ItemBar.js';
 import { HackPanel } from './ui/HackPanel.js';
-import { NetPanel } from './ui/NetPanel.js';
+import { NetPanel, ROOM_WINDOW_KEY } from './ui/NetPanel.js';
 import { ITEM_META, itemConfig, canUseSlot, hourglassLimit } from './ui/items.js';
 import { installInputGuards, setTypingGuard } from './util/ime.js';
+import { applyPlatform } from './util/platform.js';
 import { shouldGuardTyping } from './util/typing-guard.js';
 import {
   ROOM_KEY,
@@ -56,6 +60,8 @@ const $ = (id) => document.getElementById(id);
 const PC_MODALS = new Set(['pc', 'score', 'jc']);
 
 async function boot() {
+  // 先判定设备：html.is-mobile / is-desktop 决定移动端摇杆与技能按钮是否出场。
+  applyPlatform();
   // 需求 1.1：进对局后才禁复制/粘贴/剪切 + 强制英文键盘；大厅与结算页放行（见 applyPhase 里的 setTypingGuard）
   installInputGuards();
   hydrateIcons();
@@ -82,8 +88,28 @@ async function boot() {
   // ——这两种都是"游戏窗口/联机房间页"，那页必然是联机，再给一个"切回单机"的按钮只会点出一具空壳
   // （单机要自己发 MSG.JOIN，房间页的 NetClient 已经挂在 /lobby 上了）。普通本机页面照旧显示切换。
   const roomPage = isRoomJoinQuery(location.search) || Boolean(readScrubbedRoomId(location.search));
+  // 原大厅窗口只是「建房/开新窗口」的入口：NetPanel 用 window.open 打开房间页后会把地址写进
+  // sessionStorage[ROOM_WINDOW_KEY]，本页（地址栏没有房间参数）据此认领 launcher 身份。
+  // 房间页自己 roomPage=true，不受影响；单机页没有这个标记，也不受影响。
+  const readRoomWindowMarker = () => {
+    try {
+      return Boolean(sessionStorage.getItem(ROOM_WINDOW_KEY));
+    } catch {
+      return false; // 隐私模式下 sessionStorage 不可用：当作普通大厅页
+    }
+  };
+  const isLauncherTab = () => !roomPage && readRoomWindowMarker();
+  // 房间窗口回大厅/被删时，用同源广播通知大厅窗口摘掉 launcher 标记。
+  // 单靠 window.opener 会漏掉「打开房间窗口」走链接（没有 opener）的情况。
+  const roomWindowBus =
+    typeof BroadcastChannel === 'function' ? new BroadcastChannel('jican.room-window') : null;
+  let launcherNoticeShown = false;
   const netPanel = new NetPanel(store, { roomPage });
   const lobby = new Lobby($('lobby'), store, net, netPanel);
+  // 顶部「单机 / 联机」与进/离房都会改变大厅底部那颗主按钮（单机开局 ↔ 打开房间窗口），
+  // 所以这两个时机让大厅就地重画一次；NetPanel 自己不知道大厅的存在。
+  netPanel.onModeChange = () => lobby.render();
+  netPanel.onRoomChange = () => lobby.render();
   const settings = new SettingsPanel(modals, store, renderer, net);
   // 首页（大厅）显眼的「设置」入口：点开服务端配置面板（编辑 config.json 全部配置项）
   const configPanel = new ConfigPanel(modals, {
@@ -99,11 +125,18 @@ async function boot() {
   };
   let replayCharId = null;
   const gameover = new GameOverPanel(modals, store, {
-    onLobby: () => net.send(MSG.LOBBY),
+    // 结算页离开统一走 leaveGameOverRoom：清本地房间上下文 + MSG.LOBBY。
+    // 房主发 LOBBY 时服务端会删房（MessageRouter 的 closeOwnedRoom），成员只是走人。
+    onLobby: () => leaveGameOverRoom(),
     onReplay: (id) => {
       replayCharId = id;
-      net.send(MSG.LOBBY);
+      leaveGameOverRoom();
     },
+    // 房间局离开 = 删房，重开一定失败：收起「再来一局」。单机局仍可重开。
+    canReplay: () => !roomState.roomId && roomState.closed !== true && net.roomClosed !== true,
+    // 结算后 120 秒自动离开；单机/本地局不需要倒计时。
+    leaveMs: () => (roomState.roomId || roomCredential().roomid ? GAMEOVER_LEAVE_MS : 0),
+    onAutoLeave: () => leaveGameOverRoom(),
   });
   const pausePanel = new PausePanel(modals, {
     onResume: () => net.send(MSG.PAUSE, { on: false }),
@@ -111,8 +144,22 @@ async function boot() {
   });
 
   const confirmQuit = async () => {
-    const ok = await modals.confirm({ title: '结束本局？', text: '将立即结算并显示排名，本局无法继续。', ok: '结束并结算', tone: 'danger', iconName: 'flag' });
-    if (ok) net.send(MSG.LEAVE);
+    // 房主退出 = 这间房不再需要：服务端会在结算后直接删房（其他玩家结算完回大厅）。
+    // 非房主只走人，房间留给房主继续用。
+    const ownerRoom = isOwner() && Boolean(roomState.roomId || roomCredential().roomid);
+    const ok = await modals.confirm({
+      title: '结束本局？',
+      text: ownerRoom
+        ? '将立即结算并显示排名，房间会直接删除（其他玩家结算后回大厅），本局无法继续。'
+        : '将立即结算并显示排名，本局无法继续。',
+      ok: '结束并结算',
+      tone: 'danger',
+      iconName: 'flag',
+    });
+    if (ok) {
+      if (ownerRoom) roomState.closed = true; // 服务端的 room.closed 是权威；这里先本地关掉「再来一局」，避免结算瞬间点到
+      net.send(MSG.LEAVE);
+    }
     else if (store.phase === PHASE.PAUSED) pausePanel.show(store.pausedReason);
   };
 
@@ -215,6 +262,8 @@ async function boot() {
 
   // InputManager 需要 ui 才能把 B / 1-5 转成道具操作
   const input = new InputManager({ svg: $('map'), store, net, renderer, ui });
+  // 移动端：左下虚拟摇杆 + 右下技能按钮（桌面端构造器直接返回，不创建节点）
+  const mobileControls = new MobileControls({ container: $('stage'), store, input, ui });
 
   const hud = new HudPanel(store, renderer, {
     onSpeed: () => {
@@ -230,6 +279,22 @@ async function boot() {
   // ---------------------------------------------------------------- 状态订阅
   const applyPhase = () => {
     const phase = store.phase;
+    // 大厅窗口不跟着房间窗口进入对局（用户 bug：新窗口点开始，原来的窗口也变成观战）。
+    // 服务端把 PHASE / GAMEOVER 广播给同一台机器的所有连接，这里必须由「本页是不是 launcher」
+    // 拦住；否则 lobby.show(false) 会把大厅藏掉，用户看到一张只能看的观战地图。
+    if (isLauncherTab() && phase !== PHASE.LOBBY) {
+      $('app').dataset.phase = PHASE.LOBBY;
+      setTypingGuard(false);
+      lobby.show(true);
+      lobbySettingsBtn.show(true);
+      setBanner(null);
+      if (modals.kind === 'gameover') modals.close();
+      if (!launcherNoticeShown) {
+        launcherNoticeShown = true;
+        toast.show('游戏已在另一个窗口开始：本窗口保持大厅，不会跟着观战。', 'info', 'door', 6000);
+      }
+      return;
+    }
     $('app').dataset.phase = phase;
     // 需求 1.1：只有对局中（PLAYING / PAUSED）才拦复制粘贴、强制英文键盘；
     // 大厅要填房间号/服务器地址、设置页要复制 ID 密钥与 Token、结算页要复制成绩——这些阶段一律放行。
@@ -268,6 +333,8 @@ async function boot() {
   // 结算面板可能由三处触发：GAMEOVER 消息、ENDED 阶段的补放、welcome 之后的重放。
   // 统一收敛到这里，重复调用时如果面板已经开着就不再重建（幂等，避免闪一下）。
   const showGameOver = (payload) => {
+    // 大厅 launcher 窗口不跟着房间局弹结算：它保持大厅，等玩家关掉游戏窗口/重开。
+    if (isLauncherTab()) return;
     const p = payload ?? store.gameover;
     if (!p) return;
     teacherMenu.hide();
@@ -419,8 +486,10 @@ async function boot() {
   });
   net.addEventListener('welcome', (e) => {
     const p = e.detail;
-    lobby.show(store.phase === PHASE.LOBBY);
-    if (p?.role === 'spectator' && !p?.room) {
+    // launcher 大厅窗口：另一个窗口在玩时也保持大厅，不要被欢迎帧拽进观战。
+    const launcher = isLauncherTab();
+    lobby.show(store.phase === PHASE.LOBBY || launcher);
+    if (!launcher && p?.role === 'spectator' && !p?.room) {
       // 单机/被夺权：另一个窗口在玩，本窗口只是旁看
       setBanner('本窗口已转为观战：游戏正在另一个窗口里进行（点此可夺回控制权）');
     } else {
@@ -428,10 +497,15 @@ async function boot() {
     }
     // 重连/刷新后接上的若是一局已结束的对局：initialMessages 里 PHASE 在 GAMEOVER 之前，
     // 所以 applyPhase 那一刻 store.gameover 还是空的；等 GAMEOVER 落地后再补一次（幂等）。
-    if (store.phase === PHASE.ENDED && store.gameover) showGameOver(store.gameover);
+    if (!launcher && store.phase === PHASE.ENDED && store.gameover) showGameOver(store.gameover);
   });
   // 观战/被夺权：不断线，也不动画面，只把提示条亮起来，并支持一键夺回
   net.addEventListener('spectator', (e) => {
+    // launcher 大厅窗口不做「已转为观战」提示：它本来就不该跟着进对局
+    if (isLauncherTab()) {
+      setBanner(null);
+      return;
+    }
     // 房间页（有房间上下文）的观战是正常身份：提示"这局已经开始，你只是旁观"，
     // 不给「点此夺回」——点下去会把会话清掉、重连，反而把自己踢出房间。
     if (inRoomPage()) {
@@ -473,6 +547,7 @@ async function boot() {
     username: '', // welcome.room.username：我在房间里的用户名（座位表据此判断"我"是哪一行）
     style: '', // 开头像卡上的"你是谁"（由 welcome.room 带的 username/seat 拼）
     isOwner: false, // welcome.room.isOwner：房主身份（≠ 有没有座位角色），管理权唯一判据
+    closed: false, // 房间是否已被房主退出/结算删掉（服务端 room.closed 通知）：删了就不能「再来一局」
   };
   const isSeat = () => roomState.seat === true;
   /**
@@ -585,10 +660,13 @@ async function boot() {
     }
   };
 
-  /** 开局成功后统一收尾：锁房 + 弹窗 + 重画（/api/lobby/room/start 会顺手 broadcastPlayers）。 */
+  /** 开局成功后统一收尾：锁房 + 收起旧房间面板 + 重画（/api/lobby/room/start 会顺手 broadcastPlayers）。 */
   const onRoomStarted = () => {
     roomState.started = true;
     roomState.pendingCount = 0;
+    // 开局后游戏画面就是主角：旧房间面板（座位表/入房申请/清除房间）收起来，
+    // 否则房主窗口里它会浮在游戏右侧挡住画面。开局状态由房间页自己的「开始游戏」块说明。
+    roomState.open = false;
     renderRoomUi();
     toast.show('已开始游戏，房间不再接受新成员', 'gold', 'flag', 5000);
   };
@@ -611,6 +689,15 @@ async function boot() {
     toast.show(out.error || '开始游戏失败', 'danger', 'warn', 5000);
     renderRoomUi();
   };
+
+  // 房间页（独立游戏窗口）里的「开始游戏」：按钮状态由这里的 roomState 决定，
+  // 点下去复用同一个 doStartGame（HTTP start → gateway.startRound），不另开一条开局链路。
+  netPanel.startInfo = () => ({
+    isOwner: isOwner(),
+    started: roomState.started === true,
+    busy: roomState.busy === 'start',
+  });
+  netPanel.onStartGame = () => { void doStartGame(); };
 
   /**
    * 「清除房间」（v0.11）：房主主动把当前房间停掉并删除。
@@ -703,6 +790,9 @@ async function boot() {
       // 名字一律从人物表反查：seatRows 里的 charName 是上一次快照的，可能还没来得及跟着变。
       const roster = rosterOf().find((e) => e.id === cid);
       toast.show(cid ? `${who} 坐在 ${roster?.name ?? cid}` : `${who} 让出了座位`, 'ok', 'check', 2600);
+      // 座位表变了 = 这条连接在服务端眼里的角色变了（观战 ↔ 玩家）。
+      // 重新 hello 一次让服务端按新座位表 attachViewer，否则开局后自己仍是观战。
+      net.reconnect?.();
     }
     renderRoomUi();
   };
@@ -788,6 +878,12 @@ async function boot() {
    * force=true 来自房间页顶部「选座 / 换座位」按钮：那是用户主动点的，允许换座时再弹。
    */
   let seatPrompted = false;
+  /** 我还在门口等审批吗？pending 名单里有我的名字 = 服务端还没把我算成员，这时候选座只会 403。 */
+  const amPending = () => {
+    const me = myRoomName();
+    if (!me) return false;
+    return roomMembers().pending.some((p) => p.username === me);
+  };
   const popSeatPicker = (force = false) => {
     if (modals.kind) return false;
     if (roomState.started === true) {
@@ -797,6 +893,12 @@ async function boot() {
     if (!force && (seatPrompted || roomState.seat === true)) return false;
     const me = myRoomName();
     if (!me) return false;
+    // v1.5rc：待审批的人不该看到选座弹窗（老实现会拿一条合成行照弹，chip 还能点，点下去只是 403）。
+    // 房主一点「同意」，服务端就推一份新 players —— 下面 players 事件里再把弹窗补上。
+    if (amPending()) {
+      if (force) toast.show('还在等房主同意：同意后就能选座位了', 'warn', 'clock', 4200);
+      return false;
+    }
     const mine = seatRowsNow().find((r) => r.isMe);
     const row = mine || { username: me, isMe: true, canPick: true, characterId: '' };
     if (row.canPick !== true) return false;
@@ -1033,6 +1135,58 @@ async function boot() {
       const mine = seatRowsNow().find((r) => r.isMe && r.characterId);
       if (mine) roomState.seat = true;
     }
+    // 房间页的「开始游戏」按钮状态（房主/已开局/操作中）跟着房间状态一起刷新。
+    if (netPanel?.roomPage) netPanel.render();
+  };
+
+  /**
+   * 结算页离开（点「返回大厅」或 120 秒倒计时到点）：清掉本页房间上下文再回大厅。
+   *
+   * 房主发 MSG.LOBBY 时服务端会把房间删掉（MessageRouter closeOwnedRoom），成员只走人；
+   * 本地必须同步清干净，否则徽章/座位表/「打开房间窗口」还会指着一个已经不存在的房间。
+   */
+  // 房间窗口回到大厅后通知 opener 大厅窗口摘掉 launcher 标记：
+  // 否则大厅窗口会永远以为对局还在另一个窗口进行，之后单机开局也会被强制留在大厅。
+  const notifyLauncherRoomWindowGone = () => {
+    try {
+      roomWindowBus?.postMessage({ type: 'room-window-gone' });
+    } catch {
+      /* 广播不可用：退回 opener */
+    }
+    try {
+      const opener = window.opener;
+      if (!opener || opener.closed) return;
+      opener.sessionStorage.removeItem(ROOM_WINDOW_KEY);
+      opener.dispatchEvent(new CustomEvent('jican:room-window-gone'));
+    } catch {
+      /* 跨窗口访问被拒：忽略 */
+    }
+  };
+
+  const leaveGameOverRoom = () => {
+    gameover.stopCountdown();
+    notifyLauncherRoomWindowGone();
+    // 已经主动离开，房间上下文清空；closed 置 false 让下次单机局仍能正常「再来一局」。
+    roomState.closed = false;
+    roomState.roomId = '';
+    roomState.players = null;
+    roomState.seats = {};
+    roomState.seat = false;
+    roomState.isOwner = false;
+    roomState.started = false;
+    roomState.username = '';
+    roomState.open = false;
+    roomState.pendingCount = 0;
+    roomState.error = '';
+    try {
+      sessionStorage.removeItem(ROOM_KEY);
+      sessionStorage.removeItem(ROOM_WINDOW_KEY);
+    } catch {
+      /* 隐私模式下 sessionStorage 不可用：不影响回大厅 */
+    }
+    scrubAddressBar('');
+    renderRoomUi();
+    if (net.send) net.send(MSG.LOBBY);
   };
 
   /**
@@ -1069,7 +1223,15 @@ async function boot() {
     renderRoomUi();
     // 横幅优先级：进房成功 > 夺权提示。房间里的观战者是正常座位，本窗口不是"被抢了控制权"。
     setBanner(null);
-    if (!roomState.isOwner) toast.show('你已进入房间：选完座位，等房主开始游戏就能操作', 'warn', 'eye', 4500);
+    roomState.closed = false;
+    if (!roomState.isOwner) {
+      toast.show(
+        amPending()
+          ? '申请已提交：房主同意后就能选座位，坐下后等房主开始游戏'
+          : '你已进入房间：选完座位，等房主开始游戏就能操作',
+        'warn', 'eye', 4500,
+      );
+    }
     // 进房即弹选座：等一拍让 welcome 带的座位表 / 玩家列表先落进 roomState，
     // 这样弹窗里「谁已经坐了哪个角色」才是准的（用户原话：「加入房间时自动弹窗让你选择」）。
     if (!roomState.started && roomState.seat !== true) setTimeout(() => popSeatPicker(), 400);
@@ -1121,6 +1283,65 @@ async function boot() {
     roomState.fromPoll = false;
     roomState.pendingCount = countPending(roomState.players);
     renderRoomUi();
+    // 房主刚同意我的申请：pending 阶段 popSeatPicker 是压住的，这里补弹一次，
+    // 让成员不用自己去面板里找「选座」按钮（移动端面板几乎整屏，按钮常在屏幕外）。
+    if (!roomState.started && roomState.seat !== true && !seatPrompted && !amPending()) {
+      setTimeout(() => { popSeatPicker(); }, 200);
+    }
+  });
+  // 房主退出/结算 → 服务端直接删房：结算页收掉「再来一局」，本地房间状态一并清干净。
+  // 这条不是断线（连接还活着），所以不能走 lobby-rejected 的重连诊断。
+  net.addEventListener('room-closed', (e) => {
+    // launcher 大厅窗口没有房间上下文：只把「打开房间窗口」的旧地址清掉，别弹房间结算提示。
+    if (isLauncherTab()) {
+      try {
+        sessionStorage.removeItem(ROOM_WINDOW_KEY);
+      } catch {
+        /* 隐私模式：忽略 */
+      }
+      if (netPanel) {
+        netPanel.joined = null;
+        netPanel.render();
+      }
+      void lobby.render();
+      return;
+    }
+    const wasOwner = roomState.isOwner;
+    roomState.closed = true;
+    roomState.roomId = '';
+    roomState.players = null;
+    roomState.seats = {};
+    roomState.seat = false;
+    roomState.isOwner = false;
+    roomState.open = false;
+    try {
+      sessionStorage.removeItem(ROOM_KEY);
+    } catch {
+      /* 隐私模式：忽略 */
+    }
+    gameover.stopCountdown();
+    gameover.setCanReplay(false);
+    renderRoomUi();
+    notifyLauncherRoomWindowGone();
+    toast.show(wasOwner ? '本局已结束，房间已删除；看完结算回大厅即可。' : '房主结束了本局，房间已删除；看完结算回大厅即可。', 'info', 'door', 5000);
+  });
+  // 房间窗口回大厅 / 房间被删后，opener 得到通知：摘掉 launcher 标记，恢复成普通大厅页。
+  const onLauncherRoomWindowGone = () => {
+    if (roomPage) return;
+    try {
+      sessionStorage.removeItem(ROOM_WINDOW_KEY);
+    } catch {
+      /* 隐私模式：忽略 */
+    }
+    if (netPanel) {
+      netPanel.joined = null;
+      netPanel.render();
+    }
+    void lobby.render();
+  };
+  window.addEventListener('jican:room-window-gone', onLauncherRoomWindowGone);
+  roomWindowBus?.addEventListener('message', (e) => {
+    if (e.data?.type === 'room-window-gone') onLauncherRoomWindowGone();
   });
   // 鉴权被拒（服务端在 upgrade 阶段回 4xx）：停下来，把原因钉在横幅上，别再自动重连打服务器
   net.addEventListener('lobby-rejected', async (e) => {
@@ -1162,11 +1383,17 @@ async function boot() {
 
   // ---------------------------------------------------------------- 渲染循环
   const frame = (now) => {
-    renderer.frame(now);
-    hud.update(now);
-    input.tick(now);
-    itemBar.sync(); // 道具栏随快照（等级/次数/每局次数）实时刷新
-    if (teacherMenu.open && renderer.interactable?.id !== teacherMenu.targetId) teacherMenu.hide();
+    // 帧率上限来自「设置 → 画面 → 帧率」（client/js/render/fps.js，存 localStorage）。
+    // 只在到点的帧里跑逻辑与绘制；requestAnimationFrame 本身继续跑，改帧率下一帧就生效。
+    // 不限（0）时每帧都画，实际上限由显示器刷新率 vsync 决定。
+    if (shouldRender(now)) {
+      renderer.frame(now);
+      hud.update(now);
+      input.tick(now);
+      mobileControls.tick();
+      itemBar.sync(); // 道具栏随快照（等级/次数/每局次数）实时刷新
+      if (teacherMenu.open && renderer.interactable?.id !== teacherMenu.targetId) teacherMenu.hide();
+    }
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
@@ -1196,6 +1423,9 @@ async function boot() {
   }
   // 调试入口：地址栏加 ?debug 时在控制台暴露只读镜像，便于排查
   if (new URLSearchParams(location.search).has('debug')) window.__jican = { store, net, renderer, itemBar, itemShop, hackPanel, netPanel };
+  // 自动更新（v1.2）：开局对一下版本，不同就询问用户；开发期服务端返回 enabled:false 直接跳过。
+  // 不 await：网络慢不能拖着开局。
+  void checkForUpdates({ modals, toast });
 }
 
 boot().catch((err) => {

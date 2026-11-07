@@ -1,0 +1,410 @@
+/* 移动端适配：只有 <html class="is-mobile"> 时生效；桌面端规则全部落空，键鼠布局原样保留。 */
+
+/* ---------------------------------------------------------------- 基础 / 安全区 */
+html.is-mobile {
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+}
+html.is-mobile body {
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+html.is-mobile .app {
+  height: 100dvh;
+}
+html.is-mobile #stage {
+  touch-action: none; /* 拖摇杆/点地图时不要触发页面滚动与双击缩放 */
+}
+html.is-mobile body.has-web-notice .app {
+  height: calc(100dvh - var(--web-notice-h));
+}
+html.is-mobile #web-notice {
+  padding-top: calc(8px + env(safe-area-inset-top));
+}
+html.is-mobile input,
+html.is-mobile textarea,
+html.is-mobile select {
+  font-size: 16px; /* iOS 聚焦输入框时不自动放大页面 */
+}
+
+/* ---------------------------------------------------------------- 顶栏 HUD：两行紧凑布局 */
+html.is-mobile .hud {
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: calc(6px + env(safe-area-inset-top)) 8px 6px;
+  min-height: 44px;
+}
+html.is-mobile .hud-id {
+  flex: 1 1 100%;
+  gap: 6px;
+}
+html.is-mobile .hud-avatar {
+  width: 26px;
+  height: 26px;
+}
+html.is-mobile .hud-name {
+  font-size: 13px;
+}
+html.is-mobile .hud-sub {
+  display: none;
+}
+html.is-mobile .hud-metric {
+  padding: 2px 7px;
+  gap: 5px;
+}
+html.is-mobile .hud-metric .label {
+  font-size: 10px;
+}
+html.is-mobile .hud-metric .value {
+  font-size: 13px;
+}
+html.is-mobile .hud-metric .hint {
+  display: none;
+}
+html.is-mobile #hud-score {
+  display: none; /* 积分只能回自己电脑看，手机上长期显示 ?，挡地方 */
+}
+html.is-mobile .hud-actions {
+  gap: 4px;
+  margin-left: auto;
+}
+html.is-mobile .hud-actions .btn {
+  min-width: 38px;
+  height: 38px;
+}
+html.is-mobile .hud-actions .btn.icon {
+  width: 38px;
+}
+
+/* ---------------------------------------------------------------- 底部状态栏 */
+html.is-mobile .statusbar {
+  padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
+  min-height: 34px;
+  font-size: 11px;
+  overflow-x: auto;
+  flex-wrap: nowrap;
+}
+html.is-mobile .sb-hint {
+  display: none;
+}
+html.is-mobile .chip {
+  height: 22px;
+  padding: 0 7px;
+}
+
+/* ---------------------------------------------------------------- 道具栏：挪到地图顶部，图标化省空间 */
+html.is-mobile .itembar {
+  top: 8px;
+  bottom: auto;
+  gap: 4px;
+  padding: 4px;
+  max-width: calc(100% - 16px);
+}
+html.is-mobile .itembar-slot {
+  min-width: 44px;
+  width: 44px;
+  padding: 3px 4px;
+}
+html.is-mobile .itembar-slot .ibs-key,
+html.is-mobile .itembar-slot .ibs-name {
+  display: none;
+}
+html.is-mobile .itembar-slot .ibs-uses {
+  font-size: 13px;
+}
+html.is-mobile .itembar-slot .ibs-lv {
+  font-size: 8px;
+}
+html.is-mobile .toasts {
+  top: 66px;
+  right: 8px;
+  left: 8px;
+  width: auto;
+}
+
+/* ---------------------------------------------------------------- 移动端操作层 */
+html.is-mobile .touch-pad {
+  display: none; /* 旧的单按钮触屏 E 由右侧技能按钮接管 */
+}
+html.is-mobile .mobile-controls {
+  position: absolute;
+  inset: 0;
+  z-index: 14;
+  display: none;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+html.is-mobile .app[data-phase="PLAYING"] .mobile-controls,
+html.is-mobile .app[data-phase="PAUSED"] .mobile-controls {
+  display: block;
+}
+html.is-mobile .mobile-controls.is-hidden {
+  display: none !important;
+}
+
+/* 左下：虚拟摇杆 */
+html.is-mobile .mc-stick {
+  position: absolute;
+  left: calc(14px + env(safe-area-inset-left));
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(124, 182, 255, .38);
+  background: radial-gradient(circle at 50% 45%, rgba(46, 62, 92, .62), rgba(16, 21, 33, .72));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45), 0 0 0 1px rgba(255, 255, 255, .04) inset;
+  pointer-events: auto;
+  touch-action: none;
+  transition: opacity .18s, border-color .18s;
+}
+html.is-mobile .mc-stick.is-active {
+  border-color: rgba(90, 169, 255, .9);
+  background: radial-gradient(circle at 50% 45%, rgba(62, 94, 150, .72), rgba(16, 21, 33, .78));
+}
+html.is-mobile .mc-stick.is-off {
+  opacity: .42;
+}
+html.is-mobile .mc-stick-ring {
+  position: absolute;
+  inset: 16px;
+  border-radius: 50%;
+  border: 1px dashed rgba(140, 170, 220, .26);
+}
+html.is-mobile .mc-stick-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 48px;
+  height: 48px;
+  margin: -24px 0 0 -24px;
+  border-radius: 50%;
+  border: 1px solid rgba(160, 200, 255, .55);
+  background: radial-gradient(circle at 38% 32%, #7fb6ff, #356fce 62%, #24508f);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .45);
+  transition: transform .1s ease-out;
+  will-change: transform;
+}
+html.is-mobile .mc-stick.is-active .mc-stick-knob {
+  transition: none;
+}
+html.is-mobile .mc-stick-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 7px;
+  text-align: center;
+  font-size: 9px;
+  letter-spacing: .18em;
+  color: rgba(160, 190, 235, .6);
+  pointer-events: none;
+}
+
+/* 右下：技能按钮 */
+html.is-mobile .mc-actions {
+  position: absolute;
+  right: calc(12px + env(safe-area-inset-right));
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  display: grid;
+  grid-template-columns: repeat(3, 54px);
+  grid-auto-rows: 54px;
+  gap: 6px;
+  pointer-events: auto;
+}
+html.is-mobile .mc-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 54px;
+  height: 54px;
+  padding: 0;
+  border-radius: 15px;
+  border: 1px solid rgba(120, 140, 180, .45);
+  background: rgba(24, 31, 48, .82);
+  color: var(--text);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .35);
+  transition: transform .08s, background .12s, opacity .12s;
+}
+html.is-mobile .mc-btn .ico {
+  width: 18px;
+  height: 18px;
+}
+html.is-mobile .mc-btn:active:not(:disabled) {
+  transform: scale(.94);
+  background: rgba(42, 58, 88, .95);
+}
+html.is-mobile .mc-btn:disabled {
+  opacity: .32;
+}
+html.is-mobile .mc-btn.primary {
+  grid-column: span 2;
+  width: auto;
+  flex-direction: row;
+  gap: 8px;
+  font-size: 14px;
+  color: #fff;
+  border-color: #5aa9ff;
+  background: linear-gradient(180deg, #4a95ff, #2f74e0);
+}
+html.is-mobile .mc-btn.primary:active:not(:disabled) {
+  background: linear-gradient(180deg, #5aa2ff, #3a80ea);
+}
+
+/* 老师互动菜单别被技能按钮压住 */
+html.is-mobile .popover {
+  bottom: calc(190px + env(safe-area-inset-bottom));
+  z-index: 20;
+}
+
+/* ---------------------------------------------------------------- 弹窗 / 大厅：接近全屏 */
+html.is-mobile .overlay {
+  padding: 8px;
+  padding-top: calc(8px + env(safe-area-inset-top));
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+}
+html.is-mobile body.has-web-notice .overlay {
+  padding-top: calc(var(--web-notice-h) + 8px);
+}
+html.is-mobile body.has-web-notice .lobby-card,
+html.is-mobile body.has-web-notice .modal {
+  max-height: calc(100dvh - var(--web-notice-h) - 16px);
+}
+html.is-mobile body.has-web-notice .modal.cfg-modal {
+  height: calc(100dvh - var(--web-notice-h) - 16px);
+  max-height: calc(100dvh - var(--web-notice-h) - 16px);
+}
+html.is-mobile .modal {
+  width: 100%;
+  max-height: calc(100dvh - 16px);
+  padding: 14px;
+}
+html.is-mobile .modal.wide {
+  width: 100%;
+}
+html.is-mobile .lobby-card {
+  width: 100%;
+  max-height: calc(100dvh - 16px);
+  padding: 14px;
+}
+html.is-mobile .lobby-grid {
+  grid-template-columns: 1fr;
+}
+html.is-mobile .btn {
+  min-height: 40px;
+}
+html.is-mobile .btn.sm {
+  min-height: 34px;
+}
+html.is-mobile .modal.cfg-modal {
+  width: 100%;
+  height: calc(100dvh - 16px);
+  max-height: calc(100dvh - 16px);
+}
+
+/* 手机横屏：高度非常紧张，HUD 压成一行、控件再缩一圈 */
+@media (orientation: landscape) and (max-height: 500px) {
+  html.is-mobile .hud {
+    flex-wrap: nowrap;
+    gap: 5px;
+    padding: calc(4px + env(safe-area-inset-top)) 8px 4px;
+    min-height: 36px;
+  }
+  html.is-mobile .hud-id {
+    flex: 0 1 auto;
+  }
+  html.is-mobile .hud-name {
+    font-size: 12px;
+  }
+  html.is-mobile .hud-avatar {
+    width: 24px;
+    height: 24px;
+  }
+  html.is-mobile .hud-actions {
+    gap: 4px;
+  }
+  html.is-mobile .hud-actions .btn {
+    min-width: 34px;
+    height: 34px;
+  }
+  html.is-mobile .hud-actions .btn.icon {
+    width: 34px;
+  }
+  html.is-mobile #web-notice {
+    padding-top: calc(4px + env(safe-area-inset-top));
+    padding-bottom: 4px;
+    font-size: 11px;
+  }
+  html.is-mobile .itembar {
+    top: 6px;
+  }
+  html.is-mobile .toasts {
+    top: 6px;
+    width: min(300px, calc(100% - 20px));
+  }
+  html.is-mobile .mc-stick {
+    width: 88px;
+    height: 88px;
+    left: calc(10px + env(safe-area-inset-left));
+    bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+  html.is-mobile .mc-stick-knob {
+    width: 40px;
+    height: 40px;
+    margin: -20px 0 0 -20px;
+  }
+  html.is-mobile .mc-actions {
+    grid-template-columns: repeat(3, 46px);
+    grid-auto-rows: 46px;
+    gap: 5px;
+    right: calc(10px + env(safe-area-inset-right));
+    bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+  html.is-mobile .mc-btn {
+    width: 46px;
+    height: 46px;
+    border-radius: 12px;
+    font-size: 9px;
+  }
+  html.is-mobile .mc-btn .ico {
+    width: 15px;
+    height: 15px;
+  }
+  html.is-mobile .mc-btn.primary {
+    font-size: 12px;
+    gap: 6px;
+  }
+  html.is-mobile .popover {
+    bottom: calc(150px + env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 560px) {
+  html.is-mobile .mc-stick {
+    width: 100px;
+    height: 100px;
+  }
+  html.is-mobile .mc-stick-knob {
+    width: 44px;
+    height: 44px;
+    margin: -22px 0 0 -22px;
+  }
+  html.is-mobile .mc-actions {
+    grid-template-columns: repeat(3, 50px);
+    grid-auto-rows: 50px;
+    gap: 5px;
+  }
+  html.is-mobile .mc-btn {
+    width: 50px;
+    height: 50px;
+    font-size: 10px;
+  }
+}

@@ -3,7 +3,7 @@
 // 顶部的联机面板（含「单机 / 联机」切换）由 NetPanel 画；房间页（地址栏带 token/id 或 ?room=）
 // 上那个切换整块不画 —— 那一页必然是联机（需求 v0.10，见 NetPanel 的 roomPage）。
 
-import { h, icon, store as ls, fmtClock } from '../util/dom.js';
+import { h, icon, store as ls, fmtClock, webAsset } from '../util/dom.js';
 import { forceEnglishInput } from '../util/ime.js';
 import { MSG } from '/shared/constants.js';
 import { defaultSoloCharacter } from '../net/roomUrl.js';
@@ -90,7 +90,7 @@ export class Lobby {
       const netSlot = h('div.net-slot');
       this.root.replaceChildren(h('div.card.lobby-card', {},
         h('div.lobby-top', {},
-          h('img.brand-mark', { src: '/assets/icons/favicon.svg', alt: '' }),
+          h('img.brand-mark', { src: webAsset('/assets/icons/favicon.svg'), alt: '' }),
           h('div', {}, h('div.brand-title', { text: '机惨模拟器' }), h('div.brand-sub', { text: '正在连接本地服务器…' })),
           h('div.spacer'),
           this.settingsSlot ? this.settingsSlot() : null),
@@ -137,6 +137,11 @@ export class Lobby {
         h('button.btn.gold.sm', { onclick: () => this.net.send(MSG.JOIN, { resume: true }) }, '继续上局'))
       : null;
 
+    // 联机模式（顶部「单机 / 联机」切到联机）下，底部主按钮不再是单机开局，而是打开房间窗口：
+    // 房间页是独立窗口，这里只是回到那间房的入口；还没进过房间时禁用并说明先创建/加入。
+    // 单机模式完全保持原样（角色卡 + 随机种子 + 以当前角色开始）。
+    const netMode = this.netPanel?.mode === 'net';
+    const canOpenRoom = netMode && Boolean(this.netPanel?.canReopen?.());
     const seedInput = h('input.input', { placeholder: '随机种子（可选）', inputmode: 'numeric', value: this.seed, 'aria-label': '随机种子', oninput: (e) => { this.seed = e.target.value.replace(/\D/g, '').slice(0, 10); e.target.value = this.seed; } });
     forceEnglishInput(seedInput);
     const start = h('button.btn.primary', {
@@ -144,11 +149,16 @@ export class Lobby {
       title: soloSpectator ? '已有其他窗口在控制游戏' : char ? `以 ${char.name} 开始单机` : '没有可用角色',
       onclick: () => this.startSolo(this.soloCharacter()),
     }, icon('play', 'sm'), soloSpectator ? '观战模式' : '开始游戏');
+    const openRoom = h('button.btn.primary', {
+      disabled: !canOpenRoom,
+      title: canOpenRoom ? '在独立窗口里打开这间房（关掉后还能再打开）' : '先在联机面板创建或加入房间',
+      onclick: () => this.netPanel?.reopenGameWindow(),
+    }, icon('door', 'sm'), '打开房间窗口');
 
     const netSlot = h('div.net-slot');
     this.root.replaceChildren(h('div.card.lobby-card', {},
       h('div.lobby-top', {},
-        h('img.brand-mark', { src: '/assets/icons/favicon.svg', alt: '' }),
+        h('img.brand-mark', { src: webAsset('/assets/icons/favicon.svg'), alt: '' }),
         h('div', {}, h('div.brand-title', { text: '机惨模拟器' }), h('div.brand-sub', { text: `${roster.length || '30 名'} 名学生 + 5 名老师 · 你扮演其中一人，其余由 AI 驱动 · 单局 ${Math.round(lobby.round.durationMs / 60000)} 分钟` })),
         h('div.spacer'),
         ...(this.settingsSlot ? [this.settingsSlot()] : []),
@@ -168,8 +178,12 @@ export class Lobby {
           h('div.section-title', {}, isTeacher ? '老师怎么玩' : '学生怎么玩'),
           rules,
           ...(lobby.round.targetScore ? [h('div.note', {}, icon('trophy', 'sm'), `学生率先达到 ${lobby.round.targetScore} 分立即获胜；否则时间到按积分排名。`)] : []))),
-      // 房间页也没有「开始游戏」：开局按钮在房间面板里（只有房主能点），这里再放一个只会 E_STATE
-      ...(inRoom ? [] : [h('div.lobby-actions', {}, seedInput, h('div.spacer'), start)])));
+      // 房间页不画底部操作条：开局按钮在房间页自己的面板里（只有房主能点）。
+      // 大厅窗口（非房间页）联机模式下把「开始游戏」换成「打开房间窗口」，单机模式不变。
+      ...(inRoom ? [] : [h('div.lobby-actions', {},
+        ...(netMode ? [] : [seedInput]),
+        h('div.spacer'),
+        netMode ? openRoom : start)])));
     this.netPanel?.mount(netSlot);
   }
 }

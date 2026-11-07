@@ -80,18 +80,29 @@ function append(el, children) {
   }
 }
 
+/** 资源地址：纯网页版把图片打包成 data URL 放在 __JICAN_WEB__.assets 里，优先用它。 */
+export function webAsset(path) {
+  const web = globalThis.__JICAN_WEB__;
+  return (web && web.assets && web.assets[path]) || path;
+}
+
+/** 图标地址：同上，按图标名取。 */
+function iconHref(name) {
+  return webAsset(`/assets/icons/${name}.svg`);
+}
+
 /** 自绘 SVG 图标（作为 CSS 遮罩，继承 currentColor）。 */
 export function icon(name, cls = '') {
   const el = document.createElement('i');
   el.className = `ico ${cls}`.trim();
-  el.style.setProperty('--ico', `url(/assets/icons/${name}.svg)`);
+  el.style.setProperty('--ico', `url("${iconHref(name)}")`);
   return el;
 }
 
 /** 把页面里 <i data-icon="x"> 占位转成图标。 */
 export function hydrateIcons(root = document) {
   for (const el of root.querySelectorAll('[data-icon]')) {
-    el.style.setProperty('--ico', `url(/assets/icons/${el.dataset.icon}.svg)`);
+    el.style.setProperty('--ico', `url("${iconHref(el.dataset.icon)}")`);
   }
 }
 

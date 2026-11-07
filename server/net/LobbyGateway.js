@@ -7,6 +7,8 @@
 // - 玩家列表：playerList() 给前端渲染用的扁平数组，字段名是前后端约定的（见下），不要改名；
 // - 延迟 < 100ms：这个类**不做**任何缓冲、节流、批量合并，纯粹是内存里的 Map 查表 + 一次 O(n) 遍历。
 
+import { GAMEOVER_LEAVE_MS, MSG } from '../../shared/constants.js';
+
 /** 房间号固定 6 位数字（RoomManager.makeRoomId 生成的就是这个形状）。 */
 const ROOM_ID_RE = /^\d{6}$/;
 
@@ -40,6 +42,9 @@ export class LobbyGateway {
     // 不能再用 controller.hasConnection() —— 那是「有没有人控制着这台机器全局的那一局」，
     // 跟「这个房间里的人在不在」是两件事（房主还没连上时它会说 true，房主连上后又可能被别人占着）。
     this.conns = new Set();
+    // 当前正在跑的房间局：只有它才需要「结算后 120 秒自动删房」的计时。
+    this.activeRoomId = '';
+    this.gameoverTimer = null;
   }
 
   /**
@@ -124,6 +129,22 @@ export class LobbyGateway {
       if (room.token !== token) return { ok: false, status: 404, code: 'TOKEN_MISMATCH', message: '房间 Token 不匹配' };
       // 邀请码是「进房」的第二把锁：房主分享的链接里带它，光有 token 不够
       if (room.invCode !== invCode) return { ok: false, status: 404, code: 'INVCODE_MISMATCH', message: '邀请码不匹配' };
+      // v1.5rc：ws 直连进房时补绑身份（修「移动端选不了座位 / 成员开不了局」）。
+      //
+      // 前端正常流程是先 HTTP POST /api/net/join（那里会 bindIdentity），再拿返回的 wsPath 连 /lobby。
+      // 但点邀请链接、或移动端把 window.open 拦掉后用户手动开房间页时，前端只连 /lobby，不再走 HTTP。
+      // 而下面 pending / member 两条分支都会提前 return，永远走不到函数末尾的 usernames.set：
+      //   - 服务端没有 idKey → username 映射，选座鉴权（LobbyGateway.claimSeat 解析 selfName）判成
+      //     「替别人安排座位」→ 403「只有房主可以替别人安排座位」，用户看到的就是「选不了位置」；
+      //   - isSeat() 也查这张表，成员握手后只能当观战者，房主开局他也收不到自己的私有包。
+      // 排他：一个名字只认一个 idKey。名字已被别人绑定就跳过，别让拿着链接的人抢房主/别人的名字。
+      if (!probe && username) {
+        const ownerKey = this.rooms.identityOwner(room, username);
+        if (!ownerKey || ownerKey === idKey) {
+          this.usernames.set(idKey, username);
+          this.rooms.bindIdentity(room, idKey, username);
+        }
+      }
       // v0.8 排队制：鉴权通过**不等于**进房。先挂进 pending 队列，房主 approve 之后才是成员。
       // 为什么不再直接 members.add：房主要能在人进来之前看一眼「谁申请了」，并把捣乱的拒掉。
       // 这里必须严格区分 probe：probe=true（/api/net/room/check 预探测）**只校验参数，零副作用** ——
@@ -212,7 +233,11 @@ export class LobbyGateway {
     if (name && String(room.username ?? '') === name) return true;
     if (name && room.members?.has?.(name)) return true;
     const bound = key ? this.rooms.identityOf?.(room, key) ?? this.usernames.get(key) ?? '' : '';
-    return Boolean(bound) && (!name || String(bound) === name);
+    if (!bound) return false;
+    if (name && String(bound) !== name) return false;
+    // 绑过身份 ≠ 已进屋：/api/net/join 与 ws 直连都会在「等审批」阶段就 bindIdentity（选座鉴权要用），
+    // 拿绑定本身当门票等于让门口排队的人绕过开局锁。只有已审批成员 / 房主名字才算自己人。
+    return room.members?.has?.(bound) === true || String(room.username ?? '') === String(bound);
   }
 
   isSeat(room, idKey) {
@@ -322,7 +347,61 @@ export class LobbyGateway {
         return { ok: false, status: 400, code: 'START_FAILED', message: String(err && err.message ? err.message : err) };
       }
     }
+    if (started) {
+      // 记录「这一局属于哪间房」：结算事件到达后由 onGameOver 起 120s 自动删房计时。
+      this.clearGameoverTimer();
+      this.activeRoomId = String(room.id);
+    }
     return { ok: true, started, characterId, seats: { ...seats }, settings: { ...round }, room, view: this.rooms.view(room) };
+  }
+
+  /**
+   * 房间局结算了：给玩家 120 秒看排名/复制成绩，到点还没走就自动删房并送回大厅。
+   *
+   * 计时只认 activeRoomId（startRoom 成功时写入），单机局/已经离开的房间不会起表；
+   * 任何 closeRoom（手动清除、房主点离开、超时本身）都会先清掉它，防止重复删房。
+   *
+   * @returns {boolean} 是否真的启动了计时
+   */
+  onGameOver() {
+    const roomId = String(this.activeRoomId || '');
+    if (!roomId) return false;
+    if (!this.rooms.rooms.get(roomId)) {
+      this.activeRoomId = '';
+      return false;
+    }
+    this.clearGameoverTimer();
+    this.gameoverTimer = setTimeout(() => {
+      this.gameoverTimer = null;
+      const id = String(this.activeRoomId || roomId);
+      this.activeRoomId = '';
+      const room = this.rooms.rooms.get(id);
+      if (!room) return;
+      const out = this.rooms.close(id, room.ownerId);
+      if (!out?.ok) return;
+      try {
+        // toLobby:true：结算页已经停留够 120 秒，这里要把所有人送回大厅。
+        this.closeRoom(id, out.room ?? room, { toLobby: true });
+      } catch (err) {
+        this.log?.warn?.(`[room] 结算后自动清理房间 ${id} 失败：${err?.message ?? err}`);
+      }
+      try {
+        this.controller?.emit?.('packet', MSG.ROOM_CLOSED, { roomId: id });
+      } catch {
+        /* controller 还没装好：忽略 */
+      }
+      this.log?.info?.(`[room] 结算后 ${GAMEOVER_LEAVE_MS / 1000}s 未离开，房间 ${id} 已自动删除`);
+    }, GAMEOVER_LEAVE_MS);
+    this.gameoverTimer.unref?.();
+    return true;
+  }
+
+  /** 清掉「结算后自动删房」计时（房间已离开/被清除时调用，幂等）。 */
+  clearGameoverTimer() {
+    if (this.gameoverTimer !== null) {
+      clearTimeout(this.gameoverTimer);
+      this.gameoverTimer = null;
+    }
   }
 
   /**
@@ -335,10 +414,18 @@ export class LobbyGateway {
    * @param {string} roomId 被清除的房间号
    * @param {object|null} at 被删那一刻的 room 快照（RoomManager.close 返回的 room），
    *   用来知道「这间房绑定过哪些 idKey」，把它们的身份缓存一起丢掉。
+   * @param {{toLobby?: boolean}} [opt] toLobby=false 时只清房间与身份缓存，不把控制器切回大厅。
+   *   房主在对局中退出/结算会走这里：此时结算包刚广播出去，再 toLobby 会把所有人的结算画面
+   *   立刻换成大厅（用户会以为没结算）。
    */
-  closeRoom(roomId, at = null) {
+  closeRoom(roomId, at = null, { toLobby = true } = {}) {
     const id = String(roomId ?? '');
     if (!id) return false;
+    // 房间已经被删（房主点离开 / 清除房间 / 自动超时）：结算倒计时立刻作废，避免二次删房。
+    if (id === this.activeRoomId) {
+      this.clearGameoverTimer();
+      this.activeRoomId = '';
+    }
     // 房间都没了，这间房留下的身份缓存也要一起作废（否则同名新房间会串到旧座位）。
     // 两层都要清：
     //   ① 全局表 this.usernames（idKey → username）：握手成功后写的那种；
@@ -352,8 +439,9 @@ export class LobbyGateway {
       if (!room || String(room.username ?? '') === String(name) || dropped.has(String(key))) this.usernames.delete(key);
     }
     // 把这一局退回大厅：房间不存在了还停在 PLAYING 会出现「房间没了游戏还在计时」。
+    // 房主主动退出/结算时传 toLobby:false —— 这一局已经结算完，不能把结算画面换掉。
     const c = this.controller;
-    if (c && typeof c.toLobby === 'function') {
+    if (toLobby && c && typeof c.toLobby === 'function') {
       try {
         c.toLobby();
       } catch {

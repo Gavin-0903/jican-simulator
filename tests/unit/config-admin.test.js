@@ -417,6 +417,21 @@ test('SECTIONS 现在含 online 段，online.token 进 secrets 清单', async ()
   rmSync(dir, { recursive: true, force: true });
 });
 
+test('online.mode 落盘归一化：运行期 tailnet 写回 serve，历史 config.json 也能继续保存', async () => {
+  const dir = sandbox();
+  const cl = await import('../../server/persistence/OnlineConfig.js');
+  // 老版本启动时会把运行期词汇 'tailnet' 直接写进 config.json；它不在 ConfigLoader 的
+  // online.mode 白名单里，会让之后任何 online 段保存都 400。落盘必须统一成 serve。
+  cl.writeOnlineConfig(dir, { enabled: true, mode: 'tailnet', serverUrl: 'http://127.0.0.1:5199', token: 'tok_ABC-123' });
+  const cfg = JSON.parse(readFileSync(join(process.env.JICAN_DATA_DIR, 'config.json'), 'utf8'));
+  assert.equal(cfg.online.mode, 'serve', '落盘必须是 ConfigLoader 认的 serve，而不是 tailnet');
+  const admin = createConfigAdmin({ rootDir: dir });
+  assert.equal(admin.describe().effective.online.mode, 'serve', '读回来也要归一化');
+  const out = admin.apply({ section: 'online', patch: { serverUrl: 'https://x.ts.net' } });
+  assert.equal(out.ok, true, JSON.stringify(out.errors));
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test('online 段写盘走 config.json（不是 override.json），校验拦下非法值', async () => {
   const dir = sandbox();
   const m = await import('../../server/net/ConfigAdmin.js');

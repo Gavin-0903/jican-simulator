@@ -51,6 +51,51 @@ using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
+// Windows DPI 感知：**不声明的话整窗被系统按位图拉伸，125%/150% 缩放下页面发糊**（用户反馈的原话：
+// 「最后的 exe 打包完后页面过于模糊」）。根因不在页面/CSS，而在宿主 exe 没有 DPI 感知 →
+// 系统把它当 96 DPI 位图放大到 150%，WebView2 里再清晰的 SVG 也全糊。
+//
+// 顺序：Per-Monitor v2（Win10 1703+）→ Per-Monitor（Win8.1+/1703 前）→ 系统 DPI（Win7 兜底）。
+// 必须在任何窗口创建之前调用（Main 的第一句），否则进程 DPI 上下文已定，再调无效。
+internal static class DpiAware
+{
+    private const int PerMonitorAwareV2 = -4;
+    private const int PerMonitorAware = -3;
+
+    [DllImport("user32.dll")]
+    private static extern bool SetProcessDpiAwarenessContext(IntPtr context);
+
+    [DllImport("shcore.dll")]
+    private static extern int SetProcessDpiAwareness(int awareness);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetProcessDPIAware();
+
+    internal static void Enable()
+    {
+        try
+        {
+            if (Environment.OSVersion.Version.Major >= 10 && SetProcessDpiAwarenessContext(new IntPtr(PerMonitorAwareV2))) return;
+        }
+        catch { /* Win7/8 没有这个 API */ }
+        try
+        {
+            if (SetProcessDpiAwarenessContext(new IntPtr(PerMonitorAware))) return;
+        }
+        catch { }
+        try
+        {
+            if (SetProcessDpiAwareness(2) == 0) return;
+        }
+        catch { /* 只有 Win8.1+ 有 shcore */ }
+        try
+        {
+            SetProcessDPIAware();
+        }
+        catch { }
+    }
+}
+
 internal static class Program
 {
     private const int RcData = 10;
@@ -65,6 +110,8 @@ internal static class Program
     {
         try
         {
+            // 第一句：DPI 感知必须在任何窗口（AppHost / RoomForm / NotifyIcon）创建之前定下来。
+            DpiAware.Enable();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Run(argv);
@@ -481,6 +528,7 @@ internal sealed class AppHost : Form
     private NotifyIcon _tray;
     private bool _reallyExit;
     private Label _splash;
+    private System.Windows.Forms.Timer _updateTimer;
 
     internal AppHost(int port, bool debug, string exeDir, string runtimeDir, string mainExe)
     {
@@ -566,6 +614,7 @@ internal sealed class AppHost : Form
     // ------------------------------------------------------------ 生命周期
     private void OnShown(object sender, EventArgs e)
     {
+        StartUpdateWatcher();
         try
         {
             Program.HostLog("OnShown 开始，url=" + _url);
@@ -576,6 +625,42 @@ internal sealed class AppHost : Form
             Program.HostLog("InitWebView 抛异常：" + ex);
             FallbackToBrowser(ex);
         }
+    }
+
+    /// <summary>
+    /// 自动更新（v1.2）：服务端启动安装程序后会写 <数据目录>\update.quit 再退出。
+    /// 宿主看到标记就把自己的窗口一起收掉——否则安装程序会一直撞上「文件被占用」。
+    /// 用 WinForms Timer 而不是后台线程：检查就是读一个文件，放 UI 线程最省心（1 秒一次，开销可忽略）。
+    /// </summary>
+    private void StartUpdateWatcher()
+    {
+        try
+        {
+            _updateTimer = new System.Windows.Forms.Timer();
+            _updateTimer.Interval = 1000;
+            _updateTimer.Tick += delegate { CheckUpdateQuit(); };
+            _updateTimer.Start();
+        }
+        catch { /* 计时器起不来不影响正常启动 */ }
+    }
+
+    private void CheckUpdateQuit()
+    {
+        try
+        {
+            string marker = Path.Combine(Program.DataDir(), "update.quit");
+            if (!File.Exists(marker)) return;
+            try { File.Delete(marker); } catch { }
+            if (_updateTimer != null)
+            {
+                _updateTimer.Stop();
+                _updateTimer.Dispose();
+                _updateTimer = null;
+            }
+            Program.HostLog("检测到更新标记 update.quit，退出宿主交给安装程序");
+            ExitApp(true); // 服务端已经在收尾，不需要再发 /api/app/quit
+        }
+        catch { /* 忽略 */ }
     }
 
     private void InitWebView()

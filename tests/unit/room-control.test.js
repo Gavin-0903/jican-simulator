@@ -14,7 +14,7 @@ import { RoomManager } from '../../server/net/RoomManager.js';
 import { LobbyGateway } from '../../server/net/LobbyGateway.js';
 import { createLobbyRouter } from '../../server/net/LobbyHttp.js';
 import { MessageRouter } from '../../server/net/MessageRouter.js';
-import { MSG } from '../../shared/constants.js';
+import { GAMEOVER_LEAVE_MS, MSG } from '../../shared/constants.js';
 import { quiet } from '../helpers.js';
 
 /** 造一个合法（256 位 hex）的 ID 密钥。 */
@@ -500,4 +500,137 @@ test('playerList 的 online 来自真实连接，而不是 controller.hasConnect
   assert.equal(rows.find((r) => r.role === 'owner').online, true);
   untrackOwner();
   assert.equal(lobby.playerList().find((r) => r.role === 'owner').online, false);
+});
+
+// ---- ⑥ 结算后 120 秒离开：房主点「返回大厅」才删房 ----
+//
+// 需求（m01341）：结算后给玩家 120 秒看排名；点「返回大厅」删房并退出，时间到自动退出并删房。
+// 锁四件事：① 房主 LEAVE 只结束对局，房间先留着；② 结算页 LOBBY 才删房且不把结算画面切回大厅；
+// ③ 成员 LEAVE 只走人，房间还在；④ 单机连接（无 lobby）不碰房间。
+
+test('房主 MSG.LEAVE 只结束对局；结算页点返回大厅才删房（不切掉结算画面）', async () => {
+  const rooms = new RoomManager({ logger: quiet });
+  const ownerKey = makeKey(71);
+  const guestKey = makeKey(72);
+  const { room } = rooms.create({ idKey: ownerKey, username: '房主' });
+  rooms.join({ roomId: room.id, username: '客人', token: room.token, invCode: room.invCode, idKey: guestKey });
+  rooms.approve(room.id, ownerKey, '客人');
+  const packets = [];
+  const calls = [];
+  const controller = {
+    roster: [{ id: 's1-01', role: 'student' }],
+    phase: 'PLAYING',
+    viewerId: 's1-01',
+    quit: () => calls.push('quit'),
+    toLobby: () => calls.push('toLobby'),
+    // 真 controller 是 EventEmitter：WsServer 订阅 'packet' 后收到 (type, payload)。
+    emit: (...args) => packets.push(args.slice(1)),
+  };
+  const lobby = new LobbyGateway({ rooms, controller, logger: quiet });
+  const router = new MessageRouter({ controller, lobby, logger: quiet });
+  const conn = {
+    role: 'controller',
+    lobby: { idKey: ownerKey, room, seat: true, username: '房主' },
+    sent: [],
+    errors: [],
+    send: (type, payload) => conn.sent.push({ type, payload }),
+    error: (code, message) => conn.errors.push({ code, message }),
+  };
+
+  await router.handle(conn, { type: MSG.LEAVE, payload: {}, seq: 1 });
+
+  assert.deepEqual(conn.errors, []);
+  assert.deepEqual(calls, ['quit'], '结束本局不影响房间：给所有人留 120 秒看结算');
+  assert.equal(rooms.rooms.has(room.id), true, '结算后房间要先保留（倒计时结束或房主点返回大厅才删）');
+  assert.equal(packets.find(([t]) => t === MSG.ROOM_CLOSED), undefined, '还没删房，不能提前广播 room.closed');
+
+  // 结算页点「返回大厅」：phase 已经是 ENDED，房主这一下才删房。
+  controller.phase = 'ENDED';
+  await router.handle(conn, { type: MSG.LOBBY, payload: {}, seq: 2 });
+  assert.deepEqual(conn.errors, []);
+  assert.deepEqual(calls, ['quit', 'toLobby'], 'closeOwnedRoom 要传 toLobby:false，否则结算画面会被立刻换成大厅');
+  assert.equal(rooms.rooms.has(room.id), false, '房主点返回大厅后房间必须从服务器删除');
+  const closed = packets.find(([t]) => t === MSG.ROOM_CLOSED);
+  assert.ok(closed, '要广播 room.closed 让结算页收起「再来一局」：' + JSON.stringify(packets));
+  assert.equal(closed[1].roomId, room.id);
+});
+
+test('非房主 MSG.LEAVE 只走人：房间原样保留；单机连接也不碰房间', async () => {
+  const rooms = new RoomManager({ logger: quiet });
+  const ownerKey = makeKey(73);
+  const guestKey = makeKey(74);
+  const { room } = rooms.create({ idKey: ownerKey, username: '房主' });
+  rooms.join({ roomId: room.id, username: '客人', token: room.token, invCode: room.invCode, idKey: guestKey });
+  rooms.approve(room.id, ownerKey, '客人');
+  const packets = [];
+  const controller = {
+    roster: [{ id: 's1-01', role: 'student' }],
+    phase: 'PLAYING',
+    viewerId: 's1-01',
+    quit: () => {},
+    toLobby: () => {},
+    emit: (...args) => packets.push(args.slice(1)),
+  };
+  const lobby = new LobbyGateway({ rooms, controller, logger: quiet });
+  const router = new MessageRouter({ controller, lobby, logger: quiet });
+  const makeConn = (info) => {
+    const conn = {
+      role: 'controller',
+      lobby: info,
+      sent: [],
+      errors: [],
+      send: (type, payload) => conn.sent.push({ type, payload }),
+      error: (code, message) => conn.errors.push({ code, message }),
+    };
+    return conn;
+  };
+
+  const guestConn = makeConn({ idKey: guestKey, room, seat: true, username: '客人' });
+  await router.handle(guestConn, { type: MSG.LEAVE, payload: {}, seq: 1 });
+  assert.deepEqual(guestConn.errors, []);
+  assert.equal(rooms.rooms.has(room.id), true, '成员退出不能删房主的房间');
+  assert.equal(packets.length, 0, '没删房就不该广播 room.closed');
+
+  // 单机 /ws：没有房间上下文，LEAVE 只结束本机对局。
+  const solo = makeConn(null);
+  await router.handle(solo, { type: MSG.LEAVE, payload: {}, seq: 2 });
+  assert.deepEqual(solo.errors, []);
+  assert.equal(rooms.rooms.has(room.id), true, '单机连接不该碰任何房间');
+});
+
+test('结算后 120 秒没离开：自动删房、广播 room.closed 并把人送回大厅', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const rooms = new RoomManager({ logger: quiet });
+  const ownerKey = makeKey(81);
+  const { room } = rooms.create({ idKey: ownerKey, username: '房主' });
+  const packets = [];
+  const calls = [];
+  const controller = {
+    phase: 'ENDED',
+    toLobby: () => calls.push('toLobby'),
+    emit: (...args) => packets.push(args.slice(1)),
+  };
+  const lobby = new LobbyGateway({ rooms, controller, logger: quiet });
+  // 真实路径由 startRoom 写入 activeRoomId；这里直接标上，专测计时器本身。
+  lobby.activeRoomId = room.id;
+
+  assert.equal(lobby.onGameOver(), true, '房间局结算要起 120 秒计时');
+  t.mock.timers.tick(GAMEOVER_LEAVE_MS - 1);
+  assert.equal(rooms.rooms.has(room.id), true, '120 秒之内房间必须还在（玩家还在看结算）');
+
+  t.mock.timers.tick(1);
+  assert.equal(rooms.rooms.has(room.id), false, '到点自动删房');
+  assert.deepEqual(calls, ['toLobby'], '删房后把所有人送回大厅');
+  const closed = packets.find(([type]) => type === MSG.ROOM_CLOSED);
+  assert.ok(closed, '要广播 room.closed：' + JSON.stringify(packets));
+  assert.equal(closed[1].roomId, room.id);
+  assert.equal(lobby.activeRoomId, '', '计时器触发后要清空 activeRoomId');
+});
+
+test('单机结算（没有 activeRoomId）不会起自动删房计时', () => {
+  const rooms = new RoomManager({ logger: quiet });
+  const controller = { phase: 'ENDED', toLobby() {}, emit() {} };
+  const lobby = new LobbyGateway({ rooms, controller, logger: quiet });
+  assert.equal(lobby.onGameOver(), false);
+  assert.equal(lobby.gameoverTimer, null);
 });

@@ -30,6 +30,8 @@ export const MSG = Object.freeze({
   DIALOG: 'dialog',
   ERROR: 'error',
   GAMEOVER: 'gameover',
+  // 房主退出/结算时房间已被直接删除：客户端据此收起「再来一局」（房间都没了，重开一定失败）。
+  ROOM_CLOSED: 'room.closed',
   PONG: 'pong',
 });
 
@@ -164,3 +166,6 @@ export const END_REASON_TEXT = Object.freeze({
 });
 
 export const SPEEDS = Object.freeze([0.5, 1, 2]);
+
+/** 结算后留给玩家查看排名/复制成绩的时间；到点自动离开房间（房主离开会删房）。 */
+export const GAMEOVER_LEAVE_MS = 120000;

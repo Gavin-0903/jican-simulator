@@ -81,6 +81,10 @@ function unpackTo(dir) {
 }
 
 // ---------------------------------------------------------------- 启动
+// 自动更新：构建清单里带 version/flavor/setupName。服务端（ESM）读不到 node:sea，
+// 这里把清单挂到 globalThis 并落到解包根目录，server/net/Updater.js 直接按普通文件读。
+const manifest = bundleManifest();
+if (manifest) globalThis.__JICAN_APP_MANIFEST__ = manifest;
 const exeDir = dirname(process.execPath);
 const devRoot = resolve(__dirname, '..');
 let rootDir = devRoot;
@@ -89,6 +93,13 @@ if (bundled) {
   const res = unpackTo(unpacked);
   console.log('[启动] isSea=' + bundled + ' 展开 ' + res.files + ' 个资源文件到 ' + res.dir);
   rootDir = res.dir;
+  if (manifest) {
+    try {
+      writeFileSync(join(rootDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+    } catch {
+      /* 只影响自动更新的版本号来源，不阻塞启动 */
+    }
+  }
 }
 // 运行期数据（config.json / settings.json / id.key / 存档）。
 // 优先级：环境变量 JICAN_DATA_DIR > <exe目录>/data。
@@ -153,7 +164,7 @@ async function main() {
     return;
   }
   const srv = await startServer({ rootDir, llm: true, logger: console });
-  const manifest = bundleManifest();
+  const manifest = globalThis.__JICAN_APP_MANIFEST__ || bundleManifest();
   console.log('');
   console.log('  ' + (manifest ? manifest.productName : '机惨模拟器') + ' v' + (manifest ? manifest.version : ''));
   console.log('  → 在浏览器打开 ' + srv.url);

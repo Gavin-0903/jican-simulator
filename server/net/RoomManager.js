@@ -206,6 +206,20 @@ export class RoomManager {
     return room.ids.get(key) ?? null;
   }
 
+  /**
+   * 这个名字在这间房里已经被哪个 idKey 认领了（没人认领返回 null）。
+   * 用来自查「ws 直连补绑身份」时别把别人的名字抢过来：邀请链接里 username 是前端自己填的，
+   * 没有这张排他表，任何一个拿得到链接的人都能把自己的 idKey 绑到房主/别人的名字上。
+   */
+  identityOwner(room, username) {
+    const name = String(username ?? '').trim();
+    if (!room || !name || !(room.ids instanceof Map)) return null;
+    for (const [key, bound] of room.ids) {
+      if (bound === name) return key;
+    }
+    return null;
+  }
+
   /** 是否被这个房间移出过（按用户名判：观战者没有可比对的 idKey）。 */
   isKicked(room, username) {
     if (!room || !(room.kicked instanceof Set)) return false;
