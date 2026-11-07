@@ -10,7 +10,6 @@ jican-simulator-download/
 ├── version.json     # 版本 / 渠道 / 更新日志
 ├── download.json    # 下载列表：名称 → 下载链接
 ├── icon.png         # 站点图标
-├── preview.png      # 页面预览截图
 └── README.md
 ```
 
@@ -22,6 +21,14 @@ jican-simulator-download/
 python -m http.server 8000
 # 打开 http://localhost:8000/
 ```
+
+## 网页版
+
+不想下载安装包？点页面 Hero 区的「网页版试玩」按钮即可直接在浏览器里玩：
+
+https://gavin-bitwing.pages.dev/JC%E6%A8%A1%E6%8B%9F%E5%99%A8/
+
+（按钮在新标签页打开，不影响当前下载页。）
 
 ## download.json 格式
 
